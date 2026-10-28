@@ -1,4 +1,3 @@
-
 # Campus Auction — Business Rules
 
 ## 1. Purpose
@@ -153,3 +152,23 @@ Before implementation, decide:
 
 Until these policies are finalized, the backend must not introduce
 implicit behavior that contradicts the documented bidding rules.
+
+## Listing Edit and Cancellation Rules
+
+### Editing
+
+- Only the seller who created a listing may edit it.
+- Only listings with status `active` may be edited.
+- If no bids exist, the seller may edit all listing fields.
+- Once a bid exists, `starting_price`, `min_increment`, and `closes_at` are locked.
+- After bids exist, the seller may edit the title, category, description, condition, and photos, subject to validation.
+- The bid check and listing update must occur in one database transaction.
+
+### Cancellation
+
+- Only the seller may cancel their own listing.
+- Only active listings may be cancelled.
+- Cancellation requires a non-empty reason.
+- The reason must be saved in `outcome_note`.
+- Cancellation is allowed even when bids exist.
+- Notifications to affected bidders will be implemented separately.
