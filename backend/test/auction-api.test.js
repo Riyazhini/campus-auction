@@ -264,6 +264,111 @@ test("auction APIs enforce management, browsing, and bid rules", async () => {
     assert.equal(pendingDetail.events.at(-2).to_status, "closed");
     assert.equal(pendingDetail.events.at(-1).to_status, "pending_approval");
 
+    const forbiddenApproval = await fetch(
+      `${baseUrl}/${pendingAuctionId}/approve`,
+      {
+        method: "POST",
+        headers: {
+          ...auth(otherToken),
+          "content-type": "application/json",
+        },
+      }
+    );
+    assert.equal(forbiddenApproval.status, 403);
+    const approvedResponse = await fetch(
+      `${baseUrl}/${pendingAuctionId}/approve`,
+      {
+        method: "POST",
+        headers: {
+          ...auth(sellerToken),
+          "content-type": "application/json",
+        },
+      }
+    );
+    assert.equal(approvedResponse.status, 200);
+    const { auction: approvedAuction } = await approvedResponse.json();
+    assert.equal(approvedAuction.status, "approved");
+    assert.equal(approvedAuction.winner_id, Number(otherUser.lastInsertRowid));
+    assert.equal(approvedAuction.winning_amount, 20);
+    assert.equal(approvedAuction.events.at(-1).to_status, "approved");
+    const duplicateApproval = await fetch(
+      `${baseUrl}/${pendingAuctionId}/approve`,
+      {
+        method: "POST",
+        headers: {
+          ...auth(sellerToken),
+          "content-type": "application/json",
+        },
+      }
+    );
+    assert.equal(duplicateApproval.status, 409);
+
+    const rejectListingResponse = await fetch(baseUrl, {
+      method: "POST",
+      headers: {
+        ...auth(sellerToken),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        title: "Desk organizer",
+        category: "stationery",
+        description: "",
+        condition: "good",
+        starting_price: 15,
+        min_increment: 2,
+        closes_at: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+      }),
+    });
+    const rejectAuctionId =
+      (await rejectListingResponse.json()).auction.id;
+    db.prepare(`
+      INSERT INTO bids (auction_id, bidder_id, amount)
+      VALUES (?, ?, ?)
+    `).run(rejectAuctionId, Number(otherUser.lastInsertRowid), 15);
+    db.prepare("UPDATE auctions SET closes_at = ? WHERE id = ?")
+      .run(new Date(Date.now() - 1000).toISOString(), rejectAuctionId);
+    await fetch(`${baseUrl}/${rejectAuctionId}`);
+    const missingRejectReason = await fetch(
+      `${baseUrl}/${rejectAuctionId}/reject`,
+      {
+        method: "POST",
+        headers: {
+          ...auth(sellerToken),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ reason: " " }),
+      }
+    );
+    assert.equal(missingRejectReason.status, 400);
+    const rejectedResponse = await fetch(
+      `${baseUrl}/${rejectAuctionId}/reject`,
+      {
+        method: "POST",
+        headers: {
+          ...auth(sellerToken),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ reason: "The item cannot be handed over." }),
+      }
+    );
+    assert.equal(rejectedResponse.status, 200);
+    const { auction: rejectedAuction } = await rejectedResponse.json();
+    assert.equal(rejectedAuction.status, "rejected");
+    assert.equal(
+      rejectedAuction.outcome_note,
+      "The item cannot be handed over."
+    );
+
+    const myAuctionsResponse = await fetch(`${baseUrl}/mine`, {
+      headers: auth(otherToken),
+    });
+    assert.equal(myAuctionsResponse.status, 200);
+    const myAuctions = await myAuctionsResponse.json();
+    assert.deepEqual(
+      myAuctions.auctions.map((item) => item.id).sort((a, b) => a - b),
+      [pendingAuctionId, rejectAuctionId].sort((a, b) => a - b)
+    );
+
     const noBidCreateResponse = await fetch(baseUrl, {
       method: "POST",
       headers: {

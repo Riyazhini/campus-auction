@@ -193,6 +193,74 @@ function closeExpiredAuctions(auctionId = null) {
   settleExpired.immediate();
 }
 
+function decideAuction({ auctionId, actorId, decision, note = null }) {
+  const nextStatus = decision === "approve" ? "approved" : "rejected";
+  return db.transaction(() => {
+    const auction = db.prepare(`
+      SELECT seller_id, status, winner_id, winning_amount
+      FROM auctions
+      WHERE id = ?
+    `).get(auctionId);
+
+    if (!auction) {
+      return { status: 404, message: "Auction not found." };
+    }
+
+    if (auction.seller_id !== actorId) {
+      return {
+        status: 403,
+        message: "Only the seller can decide the winning bid.",
+      };
+    }
+
+    if (auction.status !== "pending_approval") {
+      return {
+        status: 409,
+        message: "This auction is not waiting for seller approval.",
+      };
+    }
+
+    if (!auction.winner_id || !Number.isSafeInteger(auction.winning_amount)) {
+      return {
+        status: 409,
+        message: "This auction has no valid provisional winning bid.",
+      };
+    }
+
+    const result = db.prepare(`
+      UPDATE auctions
+      SET status = ?, outcome_note = ?
+      WHERE id = ? AND seller_id = ? AND status = 'pending_approval'
+    `).run(nextStatus, note, auctionId, actorId);
+
+    if (result.changes === 0) {
+      return {
+        status: 409,
+        message: "This auction has already been decided.",
+      };
+    }
+
+    recordAuctionEvent({
+      auctionId,
+      actorId,
+      eventType: decision === "approve"
+        ? "seller_approved_winning_bid"
+        : "seller_rejected_winning_bid",
+      fromStatus: "pending_approval",
+      toStatus: nextStatus,
+      note,
+    });
+
+    return {
+      status: 200,
+      message: decision === "approve"
+        ? "Winning bid approved. The item is reserved for the winner."
+        : "Winning bid rejected.",
+      auction: getAuction(auctionId),
+    };
+  }).immediate();
+}
+
 router.post(
   "/",
   authenticateToken,
@@ -559,6 +627,46 @@ router.post("/:id/cancel", authenticateToken, (req, res) => {
   });
 });
 
+function handleSellerDecision(req, res, decision) {
+  const auctionId = parseAuctionId(req.params.id);
+  if (!auctionId) {
+    return res.status(400).json({ message: "Invalid auction ID." });
+  }
+
+  const note = typeof req.body?.reason === "string"
+    ? req.body.reason.trim()
+    : "";
+  if (decision === "reject" && (!note || note.length > 1000)) {
+    return res.status(400).json({
+      message: "Provide a rejection reason of 1 to 1000 characters.",
+    });
+  }
+
+  try {
+    const result = decideAuction({
+      auctionId,
+      actorId: req.user.id,
+      decision,
+      note: decision === "reject" ? note : null,
+    });
+    const { status, ...payload } = result;
+    return res.status(status).json(payload);
+  } catch (error) {
+    console.error(`Auction ${decision} error:`, error);
+    return res.status(500).json({
+      message: `Unable to ${decision} this winning bid.`,
+    });
+  }
+}
+
+router.post("/:id/approve", authenticateToken, (req, res) =>
+  handleSellerDecision(req, res, "approve")
+);
+
+router.post("/:id/reject", authenticateToken, (req, res) =>
+  handleSellerDecision(req, res, "reject")
+);
+
 router.post("/:id/bids", authenticateToken, (req, res) => {
   const auctionId = parseAuctionId(req.params.id);
   const rawAmount = req.body?.amount;
@@ -811,6 +919,42 @@ router.get("/", (req, res) => {
     auctions,
     pagination: { limit, offset, total },
   });
+});
+
+router.get("/mine", authenticateToken, (req, res) => {
+  closeExpiredAuctions();
+  const auctions = db.prepare(`
+    SELECT
+      a.id,
+      a.seller_id,
+      a.title,
+      a.category,
+      a.description,
+      a.condition,
+      a.starting_price,
+      a.min_increment,
+      a.closes_at,
+      a.status,
+      a.winner_id,
+      a.winning_amount,
+      a.outcome_note,
+      a.created_at,
+      seller.name AS seller_name,
+      winner.name AS winner_name,
+      COALESCE(
+        (SELECT MAX(b.amount) FROM bids b WHERE b.auction_id = a.id),
+        a.starting_price
+      ) AS current_price,
+      (SELECT p.url FROM photos p
+        WHERE p.auction_id = a.id ORDER BY p.id LIMIT 1) AS primary_photo
+    FROM auctions a
+    JOIN users seller ON seller.id = a.seller_id
+    LEFT JOIN users winner ON winner.id = a.winner_id
+    WHERE a.seller_id = ? OR a.winner_id = ?
+    ORDER BY a.created_at DESC, a.id DESC
+  `).all(req.user.id, req.user.id);
+
+  return res.json({ auctions });
 });
 
 router.get("/:id", (req, res) => {

@@ -187,6 +187,11 @@ function AuctionCard({ auction, onSelect }) {
             : <span className="image-placeholder">{categoryLabel(auction.category).slice(0, 1).toUpperCase()}</span>}
         </button>
         <span className="category-chip">{categoryLabel(auction.category)}</span>
+        {auction.status !== "active" && (
+          <span className={`status-chip status-${auction.status}`}>
+            {auction.status.replaceAll("_", " ")}
+          </span>
+        )}
       </div>
       <div className="card-body">
         <div className="card-heading">
@@ -215,6 +220,41 @@ function AuctionCard({ auction, onSelect }) {
         </div>
       </div>
     </article>
+  );
+}
+
+function MyAuctions({ auctions, loading, onSelect }) {
+  return (
+    <section className="page-section auction-section">
+      <div className="section-heading section-heading-row">
+        <div>
+          <p className="eyebrow">Your activity</p>
+          <h1>My auctions</h1>
+        </div>
+        {!loading && (
+          <span className="result-count">{auctions.length} listings</span>
+        )}
+      </div>
+      {loading ? (
+        <p className="muted" role="status">Loading your auctions…</p>
+      ) : auctions.length === 0 ? (
+        <div className="empty-state">
+          <span className="empty-mark">+</span>
+          <h2>No auctions to show yet.</h2>
+          <p>Listings you sell or win will appear here.</p>
+        </div>
+      ) : (
+        <div className="auction-grid">
+          {auctions.map((auction) => (
+            <AuctionCard
+              key={auction.id}
+              auction={auction}
+              onSelect={onSelect}
+            />
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -366,6 +406,8 @@ function AuctionDetail({
   onEdit,
   onUpdate,
   onCancelListing,
+  onApprove,
+  onReject,
   onPlaceBid,
   onSignIn,
   saving,
@@ -377,6 +419,7 @@ function AuctionDetail({
   const [editing, setEditing] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
   const [cancelling, setCancelling] = useState(false);
+  const [rejectionReason, setRejectionReason] = useState("");
   const [bidAmount, setBidAmount] = useState("");
   const isSeller = user && user.id === auction.seller_id;
   const canManage = isSeller && auction.status === "active";
@@ -408,6 +451,13 @@ function AuctionDetail({
     event.preventDefault();
     if (await onPlaceBid(Number(bidAmount))) {
       setBidAmount("");
+    }
+  }
+
+  async function submitRejection(event) {
+    event.preventDefault();
+    if (await onReject(rejectionReason)) {
+      setRejectionReason("");
     }
   }
 
@@ -620,6 +670,47 @@ function AuctionDetail({
               </form>
             </div>
           )}
+          {auction.status === "pending_approval" && isSeller && (
+            <div className="seller-panel">
+              <p className="eyebrow">Provisional winner</p>
+              <h2>Review winning bid</h2>
+              <p className="muted">
+                {auction.winner_name} bid {formatAmount(auction.winning_amount)}.
+                Approving reserves the item for this bidder.
+              </p>
+              <button
+                className="button button-primary button-full"
+                disabled={saving}
+                onClick={onApprove}
+              >
+                {saving ? "Saving decision…" : "Approve winning bid"}
+              </button>
+              <form className="cancel-listing-form" onSubmit={submitRejection}>
+                <label className="field">
+                  Rejection reason
+                  <textarea
+                    value={rejectionReason}
+                    onChange={(event) => setRejectionReason(event.target.value)}
+                    maxLength="1000"
+                    rows="3"
+                    required
+                  />
+                </label>
+                <button
+                  className="button button-danger button-full"
+                  disabled={saving}
+                >
+                  Reject winning bid
+                </button>
+              </form>
+            </div>
+          )}
+          {auction.status === "pending_approval" &&
+            auction.winner_id === user?.id && (
+              <p className="bid-notice">
+                Your bid is provisional and is awaiting the seller’s decision.
+              </p>
+            )}
           {auction.outcome_note && (
             <div className="outcome-note">
               <span className="meta-label">Outcome note</span>
@@ -641,6 +732,7 @@ function App() {
     }
   });
   const [auctions, setAuctions] = useState([]);
+  const [myAuctions, setMyAuctions] = useState([]);
   const [auctionTotal, setAuctionTotal] = useState(0);
   const [filters, setFilters] = useState({
     q: "",
@@ -655,6 +747,7 @@ function App() {
   const [selectedAuction, setSelectedAuction] = useState(null);
   const [page, setPage] = useState("browse");
   const [loadingAuctions, setLoadingAuctions] = useState(true);
+  const [loadingMyAuctions, setLoadingMyAuctions] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [saving, setSaving] = useState(false);
   const [bidding, setBidding] = useState(false);
@@ -691,6 +784,25 @@ function App() {
       setLoadingAuctions(false);
     }
   }, [filters]);
+
+  const loadMyAuctions = useCallback(async () => {
+    if (!auth) {
+      return;
+    }
+
+    setLoadingMyAuctions(true);
+    try {
+      const result = await apiRequest("/auctions/mine", {
+        token: auth.token,
+      });
+      setMyAuctions(result.auctions);
+      setError("");
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setLoadingMyAuctions(false);
+    }
+  }, [auth]);
 
   useEffect(() => {
     loadAuctions();
@@ -775,6 +887,9 @@ function App() {
   function logout() {
     window.localStorage.removeItem("campus-auction-auth");
     setAuth(null);
+    setMyAuctions([]);
+    setSelectedAuctionId(null);
+    setPage("browse");
   }
 
   async function createListing(formData) {
@@ -830,6 +945,29 @@ function App() {
       );
       setSelectedAuction(result.auction);
       await loadAuctions();
+      return true;
+    } catch (requestError) {
+      setError(requestError.message);
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function decideWinningBid(decision, reason = "") {
+    setSaving(true);
+    setError("");
+    try {
+      const result = await apiRequest(
+        `/auctions/${selectedAuctionId}/${decision}`,
+        {
+          method: "POST",
+          token: auth.token,
+          body: decision === "reject" ? { reason } : {},
+        }
+      );
+      setSelectedAuction(result.auction);
+      await loadMyAuctions();
       return true;
     } catch (requestError) {
       setError(requestError.message);
@@ -913,6 +1051,14 @@ function App() {
     loadAuctions();
   }
 
+  function openMyAuctions() {
+    setSelectedAuctionId(null);
+    setSelectedAuction(null);
+    setPage("my-auctions");
+    setError("");
+    loadMyAuctions();
+  }
+
   const hasActiveFilters = Object.values(filters).some(Boolean);
 
   const mainContent = page === "create" ? (
@@ -932,6 +1078,18 @@ function App() {
         submitting={saving}
       />
     </section>
+  ) : page === "my-auctions" && !selectedAuctionId ? (
+    <>
+      {error && <p className="notice notice-error page-section" role="alert">{error}</p>}
+      <MyAuctions
+        auctions={myAuctions}
+        loading={loadingMyAuctions}
+        onSelect={(auctionId) => {
+          setPage("browse");
+          setSelectedAuctionId(auctionId);
+        }}
+      />
+    </>
   ) : selectedAuctionId ? (
     loadingDetail && !selectedAuction ? (
       <section className="page-section"><p className="muted">Loading listing...</p></section>
@@ -943,6 +1101,8 @@ function App() {
         onEdit={() => setError("")}
         onUpdate={updateListing}
         onCancelListing={cancelListing}
+        onApprove={() => decideWinningBid("approve")}
+        onReject={(reason) => decideWinningBid("reject", reason)}
         onPlaceBid={placeBid}
         onSignIn={() => {
           setAuthMode("login");
@@ -1053,6 +1213,11 @@ function App() {
         </button>
         <nav className="header-actions" aria-label="Main navigation">
           <button className="nav-link" onClick={backToBrowse}>Browse</button>
+          {auth && (
+            <button className="nav-link" onClick={openMyAuctions}>
+              My auctions
+            </button>
+          )}
           <button className="button button-small button-outline" onClick={openCreateForm}>
             + Sell an item
           </button>
