@@ -1,4 +1,3 @@
-
 import jwt from "jsonwebtoken";
 
 export function authenticateToken(req, res, next) {
@@ -36,6 +35,20 @@ export function authenticateToken(req, res, next) {
     }
 
     req.user = { id: decoded.id };
+    next();
+  });
+}
+
+export function authenticateOptionalToken(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith("Bearer ") || !process.env.JWT_SECRET) {
+    return next();
+  }
+
+  jwt.verify(authHeader.slice(7), process.env.JWT_SECRET, (error, decoded) => {
+    if (!error) {
+      req.user = { id: decoded.id };
+    }
     next();
   });
 }

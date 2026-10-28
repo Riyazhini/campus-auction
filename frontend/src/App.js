@@ -252,6 +252,7 @@ function AuthDialog({ mode, onModeChange, onClose, onSubmit, error }) {
 }
 
 function AuctionCard({ auction, onSelect }) {
+  const isScheduled = Date.parse(auction.starts_at) > Date.now();
   return (
     <article className="auction-card">
       <div className="card-image">
@@ -265,9 +266,9 @@ function AuctionCard({ auction, onSelect }) {
             : <span className="image-placeholder">{categoryLabel(auction.category).slice(0, 1).toUpperCase()}</span>}
         </button>
         <span className="category-chip">{categoryLabel(auction.category)}</span>
-        {auction.status !== "active" && (
-          <span className={`status-chip status-${auction.status}`}>
-            {auction.status.replaceAll("_", " ")}
+        {(auction.status !== "active" || isScheduled) && (
+          <span className={`status-chip status-${isScheduled ? "scheduled" : auction.status}`}>
+            {isScheduled ? "scheduled" : auction.status.replaceAll("_", " ")}
           </span>
         )}
       </div>
@@ -292,8 +293,16 @@ function AuctionCard({ auction, onSelect }) {
             <strong>{formatAmount(auction.current_price)}</strong>
           </div>
           <div className="card-closing">
-            <span className="meta-label">Closes</span>
-            <span>{formatDate(auction.closes_at)}</span>
+            <span className="meta-label">
+              {isScheduled ? "Starts" : "Closes"}
+            </span>
+            <span>{formatDate(isScheduled ? auction.starts_at : auction.closes_at)}</span>
+            {isScheduled && (
+              <>
+                <span className="meta-label">Closes</span>
+                <span>{formatDate(auction.closes_at)}</span>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -505,8 +514,10 @@ function AuctionDetail({
   const [saleCancelReason, setSaleCancelReason] = useState("");
   const [bidAmount, setBidAmount] = useState("");
   const isSeller = user && user.id === auction.seller_id;
+  const isScheduled = Date.parse(auction.starts_at) > Date.now();
   const canManage = isSeller && auction.status === "active";
   const canBid = auction.status === "active" &&
+    !isScheduled &&
     Date.parse(auction.closes_at) > Date.now();
   const handoverConfirmations = auction.handover_confirmations ?? [];
   const minimumBid = auction.leading_bid
@@ -609,8 +620,8 @@ function AuctionDetail({
             <div className="detail-tags">
               <span className="category-chip">{categoryLabel(auction.category)}</span>
               <span className="condition-label">{auction.condition}</span>
-              <span className={`status-chip status-${auction.status}`}>
-                {auction.status.replaceAll("_", " ")}
+              <span className={`status-chip status-${isScheduled ? "scheduled" : auction.status}`}>
+                {isScheduled ? "scheduled" : auction.status.replaceAll("_", " ")}
               </span>
             </div>
             <h1>{auction.title}</h1>
@@ -622,6 +633,11 @@ function AuctionDetail({
               <span aria-hidden="true">·</span>
               {formatDate(auction.created_at)}
             </div>
+            {isScheduled && (
+              <p className="upcoming-start">
+                Auction starts {formatDate(auction.starts_at)}.
+              </p>
+            )}
           </div>
           <section className="history-panel">
             <div className="panel-heading">
@@ -667,8 +683,8 @@ function AuctionDetail({
               <p className="leading-bidder">Starting price · no bids yet</p>
             )}
             <div className="countdown-row">
-              <span>Time remaining</span>
-              <Countdown closesAt={auction.closes_at} />
+              <span>{isScheduled ? "Starts in" : "Time remaining"}</span>
+              <Countdown closesAt={isScheduled ? auction.starts_at : auction.closes_at} />
             </div>
             <p className="minimum-increment">
               Minimum next increment: {formatAmount(auction.min_increment)}
@@ -726,7 +742,12 @@ function AuctionDetail({
               This auction is {auction.status.replaceAll("_", " ")}.
             </p>
           )}
-          {!canBid && auction.status === "active" && (
+          {!canBid && auction.status === "active" && isScheduled && !isSeller && (
+            <p className="bid-notice">
+              Bidding opens {formatDate(auction.starts_at)}.
+            </p>
+          )}
+          {!canBid && auction.status === "active" && !isScheduled && (
             <p className="bid-notice">This auction has closed.</p>
           )}
 
@@ -1039,6 +1060,7 @@ function App() {
       controller?.abort();
       controller = new AbortController();
       apiRequest(`/auctions/${selectedAuctionId}`, {
+        token: auth?.token,
         signal: controller.signal,
       })
         .then((result) => {
@@ -1066,7 +1088,7 @@ function App() {
       window.clearInterval(poll);
       controller?.abort();
     };
-  }, [selectedAuctionId]);
+  }, [selectedAuctionId, auth?.token]);
 
   useEffect(() => {
     setBidError("");
@@ -1265,7 +1287,9 @@ function App() {
       setBidMessage(result.message);
 
       try {
-        const detail = await apiRequest(`/auctions/${selectedAuctionId}`);
+        const detail = await apiRequest(`/auctions/${selectedAuctionId}`, {
+          token: auth.token,
+        });
         setSelectedAuction(detail.auction);
       } catch (refreshError) {
         setError(`Bid accepted. ${refreshError.message}`);

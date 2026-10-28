@@ -13,6 +13,7 @@ const auction = {
   starting_price: 400,
   min_increment: 25,
   current_price: 450,
+  starts_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
   closes_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
   status: "active",
   winner_id: 8,
@@ -227,14 +228,14 @@ test("notification bell displays unread notifications and marks them read", asyn
     .toBeInTheDocument();
 });
 
-test("listing form converts an explicit AM/PM closing time to ISO", () => {
+test("listing form converts both local date-time fields to UTC ISO", () => {
   const onSubmit = jest.fn();
-  const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
-  const localDate = [
-    tomorrow.getFullYear(),
-    String(tomorrow.getMonth() + 1).padStart(2, "0"),
-    String(tomorrow.getDate()).padStart(2, "0"),
-  ].join("-");
+  const startsAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  startsAt.setSeconds(0, 0);
+  const closesAt = new Date(startsAt.getTime() + 2 * 60 * 60 * 1000);
+  const toInputValue = (date) => new Date(
+    date.getTime() - date.getTimezoneOffset() * 60000
+  ).toISOString().slice(0, 16);
   const { container } = render(
     <AuctionForm onSubmit={onSubmit} onCancel={() => {}} submitting={false} />
   );
@@ -254,23 +255,73 @@ test("listing form converts an explicit AM/PM closing time to ISO", () => {
   fireEvent.change(screen.getByLabelText("Minimum bid increment"), {
     target: { value: "10" },
   });
-  fireEvent.change(screen.getByLabelText("Closing date"), {
-    target: { value: localDate },
+  fireEvent.change(screen.getByLabelText("Auction starts"), {
+    target: { value: toInputValue(startsAt) },
   });
-  fireEvent.change(screen.getByLabelText("Hour"), {
-    target: { value: "11" },
-  });
-  fireEvent.change(screen.getByLabelText("Minute"), {
-    target: { value: "30" },
-  });
-  fireEvent.change(screen.getByLabelText("AM/PM"), {
-    target: { value: "PM" },
+  fireEvent.change(screen.getByLabelText("Auction closes"), {
+    target: { value: toInputValue(closesAt) },
   });
   fireEvent.submit(container.querySelector("form"));
 
   expect(onSubmit).toHaveBeenCalledTimes(1);
+  expect(onSubmit.mock.calls[0][0].get("starts_at")).toBe(
+    startsAt.toISOString()
+  );
   expect(onSubmit.mock.calls[0][0].get("closes_at")).toBe(
-    new Date(`${localDate}T23:30`).toISOString()
+    closesAt.toISOString()
+  );
+});
+
+test("scheduled auction detail shows its start and disables bidding", async () => {
+  currentAuction = {
+    ...auction,
+    starts_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    closes_at: new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString(),
+    bids: [],
+    leading_bid: null,
+    current_price: auction.starting_price,
+  };
+  render(<App />);
+
+  fireEvent.click(await screen.findByRole("button", {
+    name: "View Graphing calculator",
+  }));
+  expect(await screen.findByText("scheduled")).toBeInTheDocument();
+  expect(screen.getByText(/Auction starts/)).toBeInTheDocument();
+  expect(screen.getByText(/Bidding opens/)).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Place a bid" }))
+    .not.toBeInTheDocument();
+});
+
+test("seller can open a scheduled listing from My auctions", async () => {
+  currentAuction = {
+    ...auction,
+    starts_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    closes_at: new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString(),
+    bids: [],
+    leading_bid: null,
+  };
+  window.localStorage.setItem("campus-auction-auth", JSON.stringify({
+    token: "seller-token",
+    user: { id: 7, name: "Riya" },
+  }));
+  render(<App />);
+
+  await userEvent.click(await screen.findByRole("button", {
+    name: "My auctions",
+  }));
+  await userEvent.click(await screen.findByRole("button", {
+    name: "View Graphing calculator",
+  }));
+
+  expect(await screen.findByRole("heading", {
+    name: "Graphing calculator",
+  })).toBeInTheDocument();
+  expect(fetchMock).toHaveBeenCalledWith(
+    expect.stringMatching(/\/api\/auctions\/1$/),
+    expect.objectContaining({
+      headers: { authorization: "Bearer seller-token" },
+    })
   );
 });
 

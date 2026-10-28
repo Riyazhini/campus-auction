@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS auctions (
   condition TEXT NOT NULL,
   starting_price INTEGER NOT NULL CHECK (starting_price > 0),
   min_increment INTEGER NOT NULL CHECK (min_increment > 0),
+  starts_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z',
   closes_at TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'active'
     CHECK (status IN (

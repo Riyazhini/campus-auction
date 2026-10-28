@@ -1,16 +1,7 @@
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 
-const databasePath = path.join(
-  os.tmpdir(),
-  `campus-auction-${randomUUID()}.db`
-);
-
-process.env.DATABASE_PATH = databasePath;
+process.env.DATABASE_PATH = ":memory:";
 process.env.JWT_SECRET = "test-only-secret";
 
 const [{ app }, { default: db }, { default: jwt }] = await Promise.all([
@@ -66,11 +57,14 @@ test("auction APIs enforce management, browsing, and bid rules", async () => {
           condition: "good",
           starting_price: 10,
           min_increment: 1,
+          starts_at: new Date(Date.now() + 60 * 1000).toISOString(),
           closes_at: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
         }),
       });
       assert.equal(createResponse.status, 201);
       const auctionId = (await createResponse.json()).auction.id;
+      db.prepare("UPDATE auctions SET starts_at = ? WHERE id = ?")
+        .run(new Date(Date.now() - 1000).toISOString(), auctionId);
       db.prepare(`
         INSERT INTO bids (auction_id, bidder_id, amount)
         VALUES (?, ?, ?)
@@ -104,11 +98,14 @@ test("auction APIs enforce management, browsing, and bid rules", async () => {
         condition: "good",
         starting_price: 100,
         min_increment: 10,
+        starts_at: new Date(Date.now() + 60 * 1000).toISOString(),
         closes_at: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
       }),
     });
     assert.equal(createResponse.status, 201);
     const { auction: created } = await createResponse.json();
+    db.prepare("UPDATE auctions SET starts_at = ? WHERE id = ?")
+      .run(new Date(Date.now() - 1000).toISOString(), created.id);
 
     const editResponse = await fetch(`${baseUrl}/${created.id}`, {
       method: "PATCH",
@@ -171,11 +168,14 @@ test("auction APIs enforce management, browsing, and bid rules", async () => {
         condition: "good",
         starting_price: 10,
         min_increment: 1,
+        starts_at: new Date(Date.now() + 60 * 1000).toISOString(),
         closes_at: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
       }),
     });
     const notificationAuctionId =
       (await notificationAuctionResponse.json()).auction.id;
+    db.prepare("UPDATE auctions SET starts_at = ? WHERE id = ?")
+      .run(new Date(Date.now() - 1000).toISOString(), notificationAuctionId);
     const firstNotificationBid = await fetch(
       `${baseUrl}/${notificationAuctionId}/bids`,
       {
@@ -282,10 +282,14 @@ test("auction APIs enforce management, browsing, and bid rules", async () => {
         condition: "fair",
         starting_price: 50,
         min_increment: 5,
+        starts_at: new Date(Date.now() + 60 * 1000).toISOString(),
         closes_at: new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString(),
       }),
     });
     assert.equal(textbookResponse.status, 201);
+    const textbookId = (await textbookResponse.json()).auction.id;
+    db.prepare("UPDATE auctions SET starts_at = ? WHERE id = ?")
+      .run(new Date(Date.now() - 1000).toISOString(), textbookId);
 
     const filteredResponse = await fetch(
       `${baseUrl}?q=biology&category=books&condition=fair&minPrice=40&maxPrice=60&closesSoon=true`
@@ -363,7 +367,6 @@ test("auction APIs enforce management, browsing, and bid rules", async () => {
     assert.equal(editedAfterBids.current_price, 170);
     assert.deepEqual(editedAfterBids.handover_confirmations, []);
 
-    const textbookId = (await textbookResponse.json()).auction.id;
     db.prepare("UPDATE auctions SET closes_at = ? WHERE id = ?")
       .run(new Date(Date.now() - 1000).toISOString(), textbookId);
     const lateBidResponse = await fetch(`${baseUrl}/${textbookId}/bids`, {
@@ -394,11 +397,14 @@ test("auction APIs enforce management, browsing, and bid rules", async () => {
         condition: "good",
         starting_price: 20,
         min_increment: 5,
+        starts_at: new Date(Date.now() + 60 * 1000).toISOString(),
         closes_at: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
       }),
     });
     const pendingAuctionId =
       (await pendingApprovalCreate.json()).auction.id;
+    db.prepare("UPDATE auctions SET starts_at = ? WHERE id = ?")
+      .run(new Date(Date.now() - 1000).toISOString(), pendingAuctionId);
     db.prepare(`
       INSERT INTO bids (auction_id, bidder_id, amount)
       VALUES (?, ?, ?)
@@ -629,11 +635,14 @@ test("auction APIs enforce management, browsing, and bid rules", async () => {
         condition: "good",
         starting_price: 15,
         min_increment: 2,
+        starts_at: new Date(Date.now() + 60 * 1000).toISOString(),
         closes_at: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
       }),
     });
     const rejectAuctionId =
       (await rejectListingResponse.json()).auction.id;
+    db.prepare("UPDATE auctions SET starts_at = ? WHERE id = ?")
+      .run(new Date(Date.now() - 1000).toISOString(), rejectAuctionId);
     db.prepare(`
       INSERT INTO bids (auction_id, bidder_id, amount)
       VALUES (?, ?, ?)
@@ -823,11 +832,14 @@ test("auction APIs enforce management, browsing, and bid rules", async () => {
         condition: "new",
         starting_price: 10,
         min_increment: 1,
+        starts_at: new Date(Date.now() + 60 * 1000).toISOString(),
         closes_at: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
       }),
     });
     const noBidAuctionId =
       (await noBidCreateResponse.json()).auction.id;
+    db.prepare("UPDATE auctions SET starts_at = ? WHERE id = ?")
+      .run(new Date(Date.now() - 1000).toISOString(), noBidAuctionId);
     db.prepare("UPDATE auctions SET closes_at = ? WHERE id = ?")
       .run(new Date(Date.now() - 1000).toISOString(), noBidAuctionId);
     const readToCloseResponse = await fetch(`${baseUrl}/${noBidAuctionId}`);
@@ -878,13 +890,214 @@ test("auction APIs enforce management, browsing, and bid rules", async () => {
     const remainingResponse = await fetch(baseUrl);
     const remaining = await remainingResponse.json();
     assert.deepEqual(remaining.auctions, []);
+
+    const scheduledStart = new Date(Date.now() + 60 * 60 * 1000);
+    const scheduledClose = new Date(Date.now() + 4 * 60 * 60 * 1000);
+    const scheduledPayload = {
+      title: "Scheduled campus lamp",
+      category: "electronics",
+      description: "",
+      condition: "good",
+      starting_price: 40,
+      min_increment: 5,
+      starts_at: scheduledStart.toISOString(),
+      closes_at: scheduledClose.toISOString(),
+    };
+    const { starts_at: omittedStart, ...listingWithoutStart } =
+      scheduledPayload;
+    assert.ok(omittedStart);
+    const missingStartResponse = await fetch(baseUrl, {
+      method: "POST",
+      headers: {
+        ...auth(sellerToken),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(listingWithoutStart),
+    });
+    assert.equal(missingStartResponse.status, 400);
+    assert.ok((await missingStartResponse.json()).errors.starts_at);
+
+    const invalidStartResponse = await fetch(baseUrl, {
+      method: "POST",
+      headers: {
+        ...auth(sellerToken),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        ...scheduledPayload,
+        starts_at: new Date(Date.now() - 1000).toISOString(),
+      }),
+    });
+    assert.equal(invalidStartResponse.status, 400);
+    assert.ok(
+      (await invalidStartResponse.json()).errors.starts_at
+    );
+
+    const invalidCloseResponse = await fetch(baseUrl, {
+      method: "POST",
+      headers: {
+        ...auth(sellerToken),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        ...scheduledPayload,
+        closes_at: new Date(scheduledStart.getTime() - 1000).toISOString(),
+      }),
+    });
+    assert.equal(invalidCloseResponse.status, 400);
+    assert.match(
+      (await invalidCloseResponse.json()).errors.closes_at,
+      /after the auction start/
+    );
+    const shortClosingWindow = await fetch(baseUrl, {
+      method: "POST",
+      headers: {
+        ...auth(sellerToken),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        ...scheduledPayload,
+        starts_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+        closes_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+      }),
+    });
+    assert.equal(shortClosingWindow.status, 400);
+    assert.match(
+      (await shortClosingWindow.json()).errors.closes_at,
+      /at least 1 hour/
+    );
+
+    const scheduledResponse = await fetch(baseUrl, {
+      method: "POST",
+      headers: {
+        ...auth(sellerToken),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(scheduledPayload),
+    });
+    assert.equal(scheduledResponse.status, 201);
+    const scheduledAuction = (await scheduledResponse.json()).auction;
+    const scheduledId = scheduledAuction.id;
+    assert.equal(scheduledAuction.starts_at, scheduledStart.toISOString());
+
+    const hiddenBrowse = await fetch(baseUrl);
+    const hiddenListings = (await hiddenBrowse.json()).auctions;
+    assert.equal(
+      hiddenListings.some((item) => item.id === scheduledId),
+      false
+    );
+    assert.equal(
+      db.prepare("SELECT status FROM auctions WHERE id = ?")
+        .get(scheduledId).status,
+      "active"
+    );
+    assert.equal((await fetch(`${baseUrl}/${scheduledId}`)).status, 404);
+    const sellerDetail = await fetch(`${baseUrl}/${scheduledId}`, {
+      headers: auth(sellerToken),
+    });
+    assert.equal(sellerDetail.status, 200);
+    const mineResponse = await fetch(`${baseUrl}/mine`, {
+      headers: auth(sellerToken),
+    });
+    assert.ok(
+      (await mineResponse.json()).auctions.some((item) => item.id === scheduledId)
+    );
+
+    const preStartBid = await fetch(`${baseUrl}/${scheduledId}/bids`, {
+      method: "POST",
+      headers: {
+        ...auth(otherToken),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ amount: 40 }),
+    });
+    assert.equal(preStartBid.status, 409);
+    assert.match((await preStartBid.json()).message, /not started yet/);
+    assert.equal(
+      db.prepare("SELECT COUNT(*) AS count FROM bids WHERE auction_id = ?")
+        .get(scheduledId).count,
+      0
+    );
+
+    const editedStart = new Date(Date.now() + 90 * 60 * 1000).toISOString();
+    const scheduledEdit = await fetch(`${baseUrl}/${scheduledId}`, {
+      method: "PATCH",
+      headers: {
+        ...auth(sellerToken),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ starts_at: editedStart }),
+    });
+    assert.equal(scheduledEdit.status, 200);
+    assert.equal(
+      (await scheduledEdit.json()).auction.starts_at,
+      editedStart
+    );
+
+    db.prepare("UPDATE auctions SET starts_at = ? WHERE id = ?")
+      .run(new Date().toISOString(), scheduledId);
+    const boundaryBrowse = await fetch(baseUrl);
+    assert.ok(
+      (await boundaryBrowse.json()).auctions.some((item) => item.id === scheduledId)
+    );
+    const boundaryDetail = await fetch(`${baseUrl}/${scheduledId}`);
+    assert.equal(boundaryDetail.status, 200);
+    const boundaryBid = await fetch(`${baseUrl}/${scheduledId}/bids`, {
+      method: "POST",
+      headers: {
+        ...auth(otherToken),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ amount: 40 }),
+    });
+    assert.equal(boundaryBid.status, 201);
+    const lockedStartEdit = await fetch(`${baseUrl}/${scheduledId}`, {
+      method: "PATCH",
+      headers: {
+        ...auth(sellerToken),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        starts_at: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+      }),
+    });
+    assert.equal(lockedStartEdit.status, 409);
+
+    const unstartedListingResponse = await fetch(baseUrl, {
+      method: "POST",
+      headers: {
+        ...auth(sellerToken),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        ...scheduledPayload,
+        title: "Unstarted cancellable listing",
+        starts_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        closes_at: new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString(),
+      }),
+    });
+    const unstartedId =
+      (await unstartedListingResponse.json()).auction.id;
+    const unstartedCancellation = await fetch(
+      `${baseUrl}/${unstartedId}/cancel`,
+      {
+        method: "POST",
+        headers: {
+          ...auth(sellerToken),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ reason: "I no longer have this item." }),
+      }
+    );
+    assert.equal(unstartedCancellation.status, 200);
+    assert.equal(
+      (await unstartedCancellation.json()).auction.status,
+      "cancelled"
+    );
   } finally {
     await new Promise((resolve, reject) => {
       server.close((error) => error ? reject(error) : resolve());
     });
     db.close();
-    for (const suffix of ["", "-shm", "-wal"]) {
-      fs.rmSync(`${databasePath}${suffix}`, { force: true });
-    }
   }
 });

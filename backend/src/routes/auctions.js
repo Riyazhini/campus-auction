@@ -4,7 +4,10 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import db from "../db/index.js";
-import { authenticateToken } from "../middleware/auth.js";
+import {
+  authenticateOptionalToken,
+  authenticateToken,
+} from "../middleware/auth.js";
 import upload from "../middleware/upload.js";
 import { validateAuction } from "../utils/validateAuction.js";
 import { notifyUsers } from "../utils/notifications.js";
@@ -47,6 +50,7 @@ function getAuction(auctionId) {
       a.condition,
       a.starting_price,
       a.min_increment,
+      a.starts_at,
       a.closes_at,
       a.status,
       a.winner_id,
@@ -140,13 +144,14 @@ function recordAuctionEvent({
 
 function settleExpiredAuction(auctionId) {
   const auction = db.prepare(`
-    SELECT status, closes_at, seller_id, title
+    SELECT status, starts_at, closes_at, seller_id, title
     FROM auctions WHERE id = ?
   `).get(auctionId);
 
   if (
     !auction ||
     auction.status !== "active" ||
+    Date.parse(auction.starts_at) > Date.now() ||
     Date.parse(auction.closes_at) > Date.now()
   ) {
     return auction?.status ?? null;
@@ -156,6 +161,7 @@ function settleExpiredAuction(auctionId) {
     UPDATE auctions
     SET status = 'closed'
     WHERE id = ? AND status = 'active'
+      AND julianday(starts_at) <= julianday('now')
       AND julianday(closes_at) <= julianday('now')
   `).run(auctionId);
 
@@ -237,6 +243,7 @@ function closeExpiredAuctions(auctionId = null) {
       SELECT id
       FROM auctions
       WHERE status = 'active'
+        AND julianday(starts_at) <= julianday('now')
         AND julianday(closes_at) <= julianday('now')
         AND (? IS NULL OR id = ?)
     `).all(auctionId, auctionId);
@@ -353,9 +360,10 @@ router.post(
             condition,
             starting_price,
             min_increment,
+            starts_at,
             closes_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           req.user.id,
           value.title,
@@ -364,6 +372,7 @@ router.post(
           value.condition,
           value.starting_price,
           value.min_increment,
+          value.starts_at,
           value.closes_at
         );
 
@@ -431,7 +440,7 @@ router.patch(
       }
 
       const auction = db.prepare(`
-        SELECT id, seller_id, status, closes_at
+        SELECT id, seller_id, status, starts_at, closes_at
         FROM auctions
         WHERE id = ?
       `).get(auctionId);
@@ -463,9 +472,18 @@ router.patch(
         FROM bids
         WHERE auction_id = ?
       `).get(auctionId).count;
+      const startTimeChanged =
+        Object.hasOwn(req.body, "starts_at") &&
+        Date.parse(req.body.starts_at) !== Date.parse(auction.starts_at);
+      if (startTimeChanged && Date.parse(auction.starts_at) <= Date.now()) {
+        removeUploadedFiles(files);
+        return res.status(409).json({
+          message: "Auction start time cannot be changed after it has started.",
+        });
+      }
       const current = db.prepare(`
         SELECT title, category, description, condition,
-          starting_price, min_increment, closes_at
+          starting_price, min_increment, starts_at, closes_at
         FROM auctions
         WHERE id = ?
       `).get(auctionId);
@@ -478,6 +496,7 @@ router.patch(
         Date.parse(req.body.closes_at) !== Date.parse(current.closes_at);
       const { errors, value } = validateAuction(mergedValues, {
         validateClosingWindow: closingTimeChanged,
+        validateStartWindow: startTimeChanged,
       });
 
       if (Object.keys(errors).length > 0) {
@@ -492,10 +511,11 @@ router.patch(
         const lockedFields = [
           ["starting_price", "Starting price"],
           ["min_increment", "Minimum bid increment"],
+          ["starts_at", "Auction start time"],
           ["closes_at", "Closing time"],
         ];
         const changedLockedField = lockedFields.find(([field]) => {
-          if (field === "closes_at") {
+          if (field === "closes_at" || field === "starts_at") {
             return Date.parse(value[field]) !== Date.parse(current[field]);
           }
           return value[field] !== current[field];
@@ -554,11 +574,37 @@ router.patch(
         });
       }
 
-      const removePhoto = db.transaction(() => {
+      const updateListing = db.transaction(() => {
+        const latestBidCount = db.prepare(`
+          SELECT COUNT(*) AS count
+          FROM bids
+          WHERE auction_id = ?
+        `).get(auctionId).count;
+        if (latestBidCount > 0) {
+          const latest = db.prepare(`
+            SELECT starting_price, min_increment, starts_at, closes_at
+            FROM auctions
+            WHERE id = ?
+          `).get(auctionId);
+          const locked = [
+            ["starting_price", "Starting price"],
+            ["min_increment", "Minimum bid increment"],
+            ["starts_at", "Auction start time"],
+            ["closes_at", "Closing time"],
+          ].find(([field]) => (
+            field === "starts_at" || field === "closes_at"
+              ? Date.parse(value[field]) !== Date.parse(latest[field])
+              : value[field] !== latest[field]
+          ));
+          if (locked) {
+            return locked[1];
+          }
+        }
+
         db.prepare(`
           UPDATE auctions
           SET title = ?, category = ?, description = ?, condition = ?,
-            starting_price = ?, min_increment = ?, closes_at = ?
+            starting_price = ?, min_increment = ?, starts_at = ?, closes_at = ?
           WHERE id = ?
         `).run(
           value.title,
@@ -567,6 +613,7 @@ router.patch(
           value.condition,
           value.starting_price,
           value.min_increment,
+          value.starts_at,
           value.closes_at,
           auctionId
         );
@@ -590,9 +637,16 @@ router.patch(
         for (const file of files) {
           insertPhoto.run(auctionId, `/uploads/${file.filename}`);
         }
+        return null;
       });
 
-      removePhoto();
+      const lockedField = updateListing.immediate();
+      if (lockedField) {
+        removeUploadedFiles(files);
+        return res.status(409).json({
+          message: `${lockedField} cannot be changed after the first bid.`,
+        });
+      }
       const keptIds = new Set(keepPhotoIds);
       for (const photo of existingPhotos) {
         if (!keptIds.has(photo.id)) {
@@ -965,7 +1019,7 @@ router.post("/:id/bids", authenticateToken, (req, res) => {
     const result = db.transaction(() => {
       const auction = db.prepare(`
         SELECT id, seller_id, title, starting_price, min_increment,
-          closes_at, status
+          starts_at, closes_at, status
         FROM auctions
         WHERE id = ?
       `).get(auctionId);
@@ -985,6 +1039,14 @@ router.post("/:id/bids", authenticateToken, (req, res) => {
         return {
           status: 409,
           message: "This auction is no longer accepting bids.",
+        };
+      }
+
+      const startsAt = Date.parse(auction.starts_at);
+      if (!Number.isFinite(startsAt) || startsAt > Date.now()) {
+        return {
+          status: 409,
+          message: "This auction has not started yet.",
         };
       }
 
@@ -1128,7 +1190,10 @@ router.get("/", (req, res) => {
     });
   }
 
-  const filters = ["a.status = 'active'"];
+  const filters = [
+    "a.status = 'active'",
+    "julianday(a.starts_at) <= julianday('now')",
+  ];
   const values = [];
   if (search) {
     const escapedSearch = search
@@ -1181,6 +1246,7 @@ router.get("/", (req, res) => {
       a.condition,
       a.starting_price,
       a.min_increment,
+      a.starts_at,
       a.closes_at,
       a.status,
       a.created_at,
@@ -1216,6 +1282,7 @@ router.get("/mine", authenticateToken, (req, res) => {
       a.condition,
       a.starting_price,
       a.min_increment,
+      a.starts_at,
       a.closes_at,
       a.status,
       a.winner_id,
@@ -1240,7 +1307,7 @@ router.get("/mine", authenticateToken, (req, res) => {
   return res.json({ auctions });
 });
 
-router.get("/:id", (req, res) => {
+router.get("/:id", authenticateOptionalToken, (req, res) => {
   const auctionId = parseAuctionId(req.params.id);
 
   if (!auctionId) {
@@ -1256,6 +1323,13 @@ router.get("/:id", (req, res) => {
     return res.status(404).json({
       message: "Auction not found.",
     });
+  }
+
+  if (
+    Date.parse(auction.starts_at) > Date.now() &&
+    auction.seller_id !== req.user?.id
+  ) {
+    return res.status(404).json({ message: "Auction not found." });
   }
 
   return res.json({ auction });

@@ -805,6 +805,18 @@
   color: #5f6b63;
 }
 
+.status-scheduled {
+  background: #f5edcf;
+  color: #80621b;
+}
+
+.upcoming-start {
+  margin: 13px 0 0;
+  color: #80621b;
+  font-size: 12px;
+  font-weight: 650;
+}
+
 .status-cancelled {
   background: #f8e9e5;
   color: var(--red);
@@ -1087,26 +1099,6 @@
 
 .field-wide {
   grid-column: 1 / -1;
-}
-
-.closing-time-fieldset {
-  min-width: 0;
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
-.closing-time-fieldset legend {
-  margin-bottom: 7px;
-  color: #43514a;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.closing-time-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
 }
 
 .field input,

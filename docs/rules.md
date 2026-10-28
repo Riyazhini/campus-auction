@@ -8,8 +8,8 @@ by the backend and reflected in the frontend.
 
 ## 2. Bidding Rules
 
-1. Every auction must have a starting price, a minimum bid increment,
-   and a closing date and time.
+1. Every auction must have a starting price, a minimum bid increment, and
+   start and closing date-times.
 2. The first valid bid must be greater than or equal to the starting price.
 3. Every subsequent valid bid must be greater than or equal to the
    current highest bid plus the minimum bid increment.
@@ -25,6 +25,7 @@ by the backend and reflected in the frontend.
 10. When simultaneous bids are submitted, the server must process them
     safely so that no accepted bid violates the minimum increment rule.
 11. A seller cannot bid on their own auction.
+12. A bid is accepted only at or after the listing's scheduled start time.
 
 ## 3. Auction Closing Rules
 
@@ -50,8 +51,9 @@ by the backend and reflected in the frontend.
 
 ### 4.1 Active
 
-The auction is open for bidding. Valid bids may be accepted until
-the closing time, provided all bidding rules are satisfied.
+The auction is open for bidding from its start time until its closing time,
+provided all bidding rules are satisfied. Before its start time, an active
+listing is scheduled, hidden from public browsing, and cannot receive bids.
 
 ### 4.2 Closed
 
@@ -134,8 +136,9 @@ explicitly defined before implementation.
 
 ## 7. Browsing and Search
 
-1. The auction list shows active listings and their current price. If there
-   are no bids, the current price is the starting price.
+1. The auction list shows started active listings and their current price. If
+   there are no bids, the current price is the starting price. Future listings
+   remain visible to their seller in My auctions.
 2. Keyword search covers the title, description, and category.
 3. Category and condition filters use the values defined by the backend.
 4. Minimum and maximum price filters apply to the current price.
@@ -190,6 +193,9 @@ implicit behavior that contradicts the documented bidding rules.
 - Only listings with status `active` may be edited.
 - If no bids exist, the seller may edit all listing fields.
 - Once a bid exists, `starting_price`, `min_increment`, and `closes_at` are locked.
+- A scheduled start may be changed only by its seller while it remains in the
+  future and has no bids. Start time is locked once the auction starts or a bid
+  exists.
 - After bids exist, the seller may edit the title, category, description, condition, and photos, subject to validation.
 - The bid check and listing update must occur in one database transaction.
 
@@ -217,3 +223,17 @@ implicit behavior that contradicts the documented bidding rules.
   read status only for notifications they own.
 - The frontend shows unread count, read status, and a periodically refreshed
   notification list.
+
+## Scheduling Rules
+
+- Every listing has a `starts_at` and `closes_at` timestamp stored in UTC.
+  Browser-local date-time input values are converted to UTC before storage.
+- Creation requires a future start, a closing time at least one hour ahead,
+  and a close later than the start.
+- A future-start listing remains `active` in the lifecycle state machine, but
+  is treated as scheduled: public browse/search omits it and direct detail
+  requests return not found to anyone other than its seller.
+- At or after `starts_at`, the listing is publicly visible and accepts bids
+  without a background scheduler. The server checks start eligibility on
+  every bid attempt.
+- Expiration settlement applies only to started active listings.

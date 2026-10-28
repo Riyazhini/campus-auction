@@ -8,7 +8,10 @@ import {
   MAX_CLOSING_DURATION_MS,
 } from "../constants/auction.js";
 
-export function validateAuction(data, { validateClosingWindow = true } = {}) {
+export function validateAuction(data, {
+  validateClosingWindow = true,
+  validateStartWindow = true,
+} = {}) {
   const errors = {};
 
   const title =
@@ -29,6 +32,7 @@ export function validateAuction(data, { validateClosingWindow = true } = {}) {
 
   const startingPrice = data.starting_price;
   const minIncrement = data.min_increment;
+  const startsAt = data.starts_at;
   const closesAt = data.closes_at;
 
   if (!title) {
@@ -72,6 +76,22 @@ export function validateAuction(data, { validateClosingWindow = true } = {}) {
       "Minimum bid increment must be a positive whole number.";
   }
 
+  let startsAtUtc = null;
+  let startTime = null;
+
+  if (typeof startsAt !== "string" || !startsAt.trim()) {
+    errors.starts_at = "Auction start date and time are required.";
+  } else {
+    startTime = Date.parse(startsAt);
+    if (!Number.isFinite(startTime)) {
+      errors.starts_at = "Please provide a valid auction start date and time.";
+    } else if (validateStartWindow && startTime <= Date.now()) {
+      errors.starts_at = "Auction start time must be in the future.";
+    } else {
+      startsAtUtc = new Date(startTime).toISOString();
+    }
+  }
+
   let closesAtUtc = null;
 
   if (typeof closesAt !== "string" || !closesAt.trim()) {
@@ -84,6 +104,8 @@ export function validateAuction(data, { validateClosingWindow = true } = {}) {
       errors.closes_at = "Please provide a valid closing date and time.";
     } else if (closingTime <= now) {
       errors.closes_at = "Closing time must be in the future.";
+    } else if (startTime !== null && closingTime <= startTime) {
+      errors.closes_at = "Closing time must be after the auction start.";
     } else if (
       validateClosingWindow &&
       closingTime - now < MIN_CLOSING_DURATION_MS
@@ -110,6 +132,7 @@ export function validateAuction(data, { validateClosingWindow = true } = {}) {
       condition,
       starting_price: Number(startingPrice),
       min_increment: Number(minIncrement),
+      starts_at: startsAtUtc,
       closes_at: closesAtUtc,
     },
   };

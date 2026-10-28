@@ -7,6 +7,8 @@ items. The project uses a React frontend, an Express API, and SQLite.
 
 - Campus-email registration, login, and authenticated listing management
 - Create, edit, and cancel auction listings with up to five photos
+- Schedule auction start and closing date-times; scheduled listings stay
+  private until bidding opens
 - Browse and filter active auctions; inspect listing details and public bid history
 - Place bids with server-side validation and serialized SQLite transactions
 - Expired auctions close on reads or bid attempts, selecting a provisional winner or marking the auction unsold
@@ -16,7 +18,7 @@ items. The project uses a React frontend, an Express API, and SQLite.
 - Auction state changes and outcome notes are recorded in an event history
 - Relevant users receive in-app notifications for outbids and auction lifecycle outcomes
 - The auction home page groups matching listings by category
-- Listing closing times use explicit hour, minute, and AM/PM controls
+- Listing start and closing times use paired native date-time inputs
 
 ## Requirements
 
@@ -83,7 +85,8 @@ Create React App can produce a production build with `npm run build`.
 - `POST /api/auth/register`, `POST /api/auth/login`, `GET /api/auth/me`
 - `GET /api/auctions` with `q`, `category`, `condition`, `minPrice`,
   `maxPrice`, `closesSoon`, `limit`, and `offset` query parameters
-- `POST /api/auctions` to create a listing (bearer token required)
+- `POST /api/auctions` to create a listing with `starts_at` and `closes_at`
+  UTC timestamps (bearer token required)
 - `GET /api/auctions/:id` for item details and public bid history
 - `GET /api/auctions/mine` for authenticated seller and winner listings
 - `POST /api/auctions/:id/approve` or `/reject` for seller decisions
@@ -104,6 +107,12 @@ Expired active auctions are settled on auction list/detail reads and late bid
 attempts. The highest valid bid is stored as the provisional winner and moves
 the auction to `pending_approval`; an auction without bids becomes `unsold`.
 The auction detail response includes a chronological `events` history.
+
+Scheduled listings have status `active` with a future `starts_at`. They are
+hidden from public browse/search and non-seller detail requests until the start
+time, but remain available to their seller in My auctions. Reads and bid
+attempts use server time; no scheduler is required. The browser-local date-time
+inputs are converted to UTC ISO timestamps before persistence.
 
 Notifications are stored only for the relevant users: previous leaders when
 outbid, sellers and provisional winners when an auction closes, winners after

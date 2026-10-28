@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "node --test test/auction-api.test.js",
+    "test": "node --test test/auction-api.test.js test/auction-migration.test.js",
     "start": "node server.js",
     "dev": "nodemon server.js"
   },
