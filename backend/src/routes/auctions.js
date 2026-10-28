@@ -8,6 +8,8 @@ import { authenticateToken } from "../middleware/auth.js";
 import upload from "../middleware/upload.js";
 import { validateAuction } from "../utils/validateAuction.js";
 import {
+  AUCTION_CATEGORIES,
+  ITEM_CONDITIONS,
   MAX_PHOTOS,
 } from "../constants/auction.js";
 
@@ -66,6 +68,48 @@ function getAuction(auctionId) {
   `).all(auctionId);
 
   return { ...auction, photos };
+}
+
+function closeExpiredAuctions(auctionId = null) {
+  const settleExpired = db.transaction(() => {
+    const expiredAuctions = db.prepare(`
+      SELECT id
+      FROM auctions
+      WHERE status = 'active'
+        AND julianday(closes_at) <= julianday('now')
+        AND (? IS NULL OR id = ?)
+    `).all(auctionId, auctionId);
+    const markClosed = db.prepare(`
+      UPDATE auctions
+      SET status = 'closed'
+      WHERE id = ? AND status = 'active'
+    `);
+    const selectLeadingBid = db.prepare(`
+      SELECT bidder_id, amount
+      FROM bids
+      WHERE auction_id = ?
+      ORDER BY amount DESC, id ASC
+      LIMIT 1
+    `);
+    const settle = db.prepare(`
+      UPDATE auctions
+      SET status = ?, winner_id = ?, winning_amount = ?
+      WHERE id = ? AND status = 'closed'
+    `);
+
+    for (const auction of expiredAuctions) {
+      markClosed.run(auction.id);
+      const leadingBid = selectLeadingBid.get(auction.id);
+      settle.run(
+        leadingBid ? "pending_approval" : "unsold",
+        leadingBid?.bidder_id ?? null,
+        leadingBid?.amount ?? null,
+        auction.id
+      );
+    }
+  });
+
+  settleExpired.immediate();
 }
 
 router.post(
@@ -418,6 +462,273 @@ router.post("/:id/cancel", authenticateToken, (req, res) => {
   });
 });
 
+router.post("/:id/bids", authenticateToken, (req, res) => {
+  const auctionId = parseAuctionId(req.params.id);
+  const rawAmount = req.body?.amount;
+  const amountText = typeof rawAmount === "string" ? rawAmount.trim() : null;
+  const amount = typeof rawAmount === "number"
+    ? rawAmount
+    : amountText && /^\d+$/.test(amountText)
+      ? Number(amountText)
+      : NaN;
+
+  if (!auctionId) {
+    return res.status(400).json({ message: "Invalid auction ID." });
+  }
+
+  if (!Number.isSafeInteger(amount) || amount <= 0) {
+    return res.status(400).json({
+      message: "Bid amount must be a positive whole number.",
+    });
+  }
+
+  try {
+    const result = db.transaction(() => {
+      const auction = db.prepare(`
+        SELECT id, seller_id, starting_price, min_increment, closes_at, status
+        FROM auctions
+        WHERE id = ?
+      `).get(auctionId);
+
+      if (!auction) {
+        return { status: 404, message: "Auction not found." };
+      }
+
+      if (auction.seller_id === req.user.id) {
+        return {
+          status: 403,
+          message: "You cannot bid on your own listing.",
+        };
+      }
+
+      if (auction.status !== "active") {
+        return {
+          status: 409,
+          message: "This auction is no longer accepting bids.",
+        };
+      }
+
+      const leadingBid = db.prepare(`
+        SELECT bidder_id, amount
+        FROM bids
+        WHERE auction_id = ?
+        ORDER BY amount DESC, id ASC
+        LIMIT 1
+      `).get(auctionId);
+
+      const closesAt = Date.parse(auction.closes_at);
+      if (!Number.isFinite(closesAt)) {
+        return {
+          status: 409,
+          message: "This auction has an invalid closing time.",
+        };
+      }
+
+      if (closesAt <= Date.now()) {
+        db.prepare(`
+          UPDATE auctions SET status = 'closed'
+          WHERE id = ? AND status = 'active'
+        `).run(auctionId);
+        db.prepare(`
+          UPDATE auctions
+          SET status = ?, winner_id = ?, winning_amount = ?
+          WHERE id = ? AND status = 'closed'
+        `).run(
+          leadingBid ? "pending_approval" : "unsold",
+          leadingBid?.bidder_id ?? null,
+          leadingBid?.amount ?? null,
+          auctionId
+        );
+        return {
+          status: 409,
+          message: "This auction has closed and is no longer accepting bids.",
+        };
+      }
+
+      const minimumBid = leadingBid
+        ? leadingBid.amount + auction.min_increment
+        : auction.starting_price;
+
+      if (!Number.isSafeInteger(minimumBid)) {
+        return {
+          status: 409,
+          message: "This auction cannot accept a higher safe bid amount.",
+        };
+      }
+
+      if (amount < minimumBid) {
+        return {
+          status: 400,
+          message: `Your bid must be at least ${minimumBid}.`,
+          minimum_bid: minimumBid,
+        };
+      }
+
+      const bidder = db.prepare(`
+        SELECT name FROM users WHERE id = ?
+      `).get(req.user.id);
+      if (!bidder) {
+        return {
+          status: 401,
+          message: "Your user account no longer exists.",
+        };
+      }
+
+      const insertedBid = db.prepare(`
+        INSERT INTO bids (auction_id, bidder_id, amount)
+        VALUES (?, ?, ?)
+      `).run(auctionId, req.user.id, amount);
+      const bid = db.prepare(`
+        SELECT id, amount, created_at
+        FROM bids WHERE id = ?
+      `).get(Number(insertedBid.lastInsertRowid));
+
+      return {
+        status: 201,
+        bid: { ...bid, bidder_name: bidder.name },
+      };
+    }).immediate();
+
+    if (result.status !== 201) {
+      const { status, ...payload } = result;
+      return res.status(status).json(payload);
+    }
+
+    return res.status(201).json({
+      message: "Bid placed successfully.",
+      bid: result.bid,
+      current_price: result.bid.amount,
+    });
+  } catch (error) {
+    console.error("Place bid error:", error);
+    return res.status(500).json({
+      message: "Unable to place bid at this time.",
+    });
+  }
+});
+
+router.get("/", (req, res) => {
+  closeExpiredAuctions();
+  const limit = req.query.limit === undefined ? 24 : Number(req.query.limit);
+  const offset = req.query.offset === undefined ? 0 : Number(req.query.offset);
+  const search = typeof req.query.q === "string" ? req.query.q.trim() : "";
+  const category = req.query.category ?? "";
+  const condition = req.query.condition ?? "";
+  const parsePrice = (value) => {
+    if (value === undefined) {
+      return null;
+    }
+    if (typeof value !== "string" || !/^\d+$/.test(value)) {
+      return NaN;
+    }
+    return Number(value);
+  };
+  const minPrice = parsePrice(req.query.minPrice);
+  const maxPrice = parsePrice(req.query.maxPrice);
+  const closesSoon = req.query.closesSoon ?? "";
+  const currentPriceSql = `COALESCE(
+    (SELECT MAX(b.amount) FROM bids b WHERE b.auction_id = a.id),
+    a.starting_price
+  )`;
+
+  if (
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > 50 ||
+    !Number.isSafeInteger(offset) ||
+    offset < 0 ||
+    (req.query.q !== undefined && typeof req.query.q !== "string") ||
+    search.length > 100 ||
+    (category && !AUCTION_CATEGORIES.includes(category)) ||
+    (condition && !ITEM_CONDITIONS.includes(condition)) ||
+    (minPrice !== null &&
+      (!Number.isSafeInteger(minPrice) || minPrice < 0)) ||
+    (maxPrice !== null &&
+      (!Number.isSafeInteger(maxPrice) || maxPrice < 0)) ||
+    (minPrice !== null && maxPrice !== null && minPrice > maxPrice) ||
+    !["", "true", "false"].includes(closesSoon)
+  ) {
+    return res.status(400).json({
+      message: "Invalid auction search or filter values.",
+    });
+  }
+
+  const filters = ["a.status = 'active'"];
+  const values = [];
+  if (search) {
+    const escapedSearch = search
+      .toLowerCase()
+      .replace(/[\\%_]/g, "\\$&");
+    const pattern = `%${escapedSearch}%`;
+    filters.push(`(
+      LOWER(a.title) LIKE ? ESCAPE char(92) OR
+      LOWER(COALESCE(a.description, '')) LIKE ? ESCAPE char(92) OR
+      LOWER(a.category) LIKE ? ESCAPE char(92)
+    )`);
+    values.push(pattern, pattern, pattern);
+  }
+  if (category) {
+    filters.push("a.category = ?");
+    values.push(category);
+  }
+  if (condition) {
+    filters.push("a.condition = ?");
+    values.push(condition);
+  }
+  if (minPrice !== null) {
+    filters.push(`${currentPriceSql} >= ?`);
+    values.push(minPrice);
+  }
+  if (maxPrice !== null) {
+    filters.push(`${currentPriceSql} <= ?`);
+    values.push(maxPrice);
+  }
+  if (closesSoon === "true") {
+    filters.push(`
+      julianday(a.closes_at) > julianday('now') AND
+      julianday(a.closes_at) <= julianday('now', '+1 day')
+    `);
+  }
+  const whereClause = filters.join(" AND ");
+  const total = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM auctions a
+    WHERE ${whereClause}
+  `).get(...values).count;
+
+  const auctions = db.prepare(`
+    SELECT
+      a.id,
+      a.seller_id,
+      a.title,
+      a.category,
+      a.description,
+      a.condition,
+      a.starting_price,
+      a.min_increment,
+      a.closes_at,
+      a.status,
+      a.created_at,
+      u.name AS seller_name,
+      COALESCE(
+        (SELECT MAX(b.amount) FROM bids b WHERE b.auction_id = a.id),
+        a.starting_price
+      ) AS current_price,
+      (SELECT p.url FROM photos p
+        WHERE p.auction_id = a.id ORDER BY p.id LIMIT 1) AS primary_photo
+    FROM auctions a
+    JOIN users u ON u.id = a.seller_id
+    WHERE ${whereClause}
+    ORDER BY a.closes_at ASC, a.id DESC
+    LIMIT ? OFFSET ?
+  `).all(...values, limit, offset);
+
+  return res.json({
+    auctions,
+    pagination: { limit, offset, total },
+  });
+});
+
 router.get("/:id", (req, res) => {
   const auctionId = parseAuctionId(req.params.id);
 
@@ -427,6 +738,7 @@ router.get("/:id", (req, res) => {
     });
   }
 
+  closeExpiredAuctions(auctionId);
   const auction = getAuction(auctionId);
 
   if (!auction) {
@@ -435,8 +747,29 @@ router.get("/:id", (req, res) => {
     });
   }
 
+  const bids = db.prepare(`
+    SELECT b.id, b.amount, b.created_at, u.name AS bidder_name
+    FROM bids b
+    JOIN users u ON u.id = b.bidder_id
+    WHERE b.auction_id = ?
+    ORDER BY b.created_at ASC, b.id ASC
+  `).all(auctionId);
+  const leadingBid = db.prepare(`
+    SELECT b.id, b.amount, b.created_at, u.name AS bidder_name
+    FROM bids b
+    JOIN users u ON u.id = b.bidder_id
+    WHERE b.auction_id = ?
+    ORDER BY b.amount DESC, b.id ASC
+    LIMIT 1
+  `).get(auctionId) ?? null;
+
   return res.json({
-    auction,
+    auction: {
+      ...auction,
+      bids,
+      leading_bid: leadingBid,
+      current_price: leadingBid?.amount ?? auction.starting_price,
+    },
   });
 });
 

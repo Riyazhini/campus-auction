@@ -24,6 +24,7 @@ by the backend and reflected in the frontend.
    silently modified or deleted.
 10. When simultaneous bids are submitted, the server must process them
     safely so that no accepted bid violates the minimum increment rule.
+11. A seller cannot bid on their own auction.
 
 ## 3. Auction Closing Rules
 
@@ -38,6 +39,9 @@ by the backend and reflected in the frontend.
 8. An auction with no valid bids after closing becomes unsold.
 9. Auction closure and bid validation must be enforced on the backend,
    even if the frontend has not refreshed.
+10. When an expired active auction is next read or receives a bid attempt,
+    the server settles it to `pending_approval` if it has bids, or `unsold`
+    if it has none. A bid attempt at or after the closing time is rejected.
 
 ## 4. Auction States
 
@@ -121,7 +125,19 @@ explicitly defined before implementation.
    email addresses, and contact details must not be exposed in
    public bidding history.
 
-## 7. Backend Enforcement
+## 7. Browsing and Search
+
+1. The auction list shows active listings and their current price. If there
+   are no bids, the current price is the starting price.
+2. Keyword search covers the title, description, and category.
+3. Category and condition filters use the values defined by the backend.
+4. Minimum and maximum price filters apply to the current price.
+5. “Closing soon” means the auction closes within the next 24 hours.
+6. Auction detail includes item information, the leading bid, a countdown,
+   and the public bid history. The server remains authoritative for closing
+   and bidding decisions.
+
+## 8. Backend Enforcement
 
 1. All bid validation must happen on the server.
 2. The server must verify the auction state, closing time, starting price,
@@ -137,11 +153,10 @@ explicitly defined before implementation.
 7. Monetary values must use a precise representation suitable for
    currency calculations, not floating-point arithmetic.
 
-## 8. Assumptions and Policies to Finalize
+## 9. Assumptions and Policies to Finalize
 
 Before implementation, decide:
 
-- Whether sellers can bid on their own auctions.
 - Whether bidders can place multiple consecutive bids.
 - Who is authorized to approve or reject an auction outcome.
 - What happens after a winning bidder fails to collect an item.

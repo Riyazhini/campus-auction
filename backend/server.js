@@ -9,7 +9,7 @@ import authRouter from "./src/routes/auth.js";
 import auctionsRouter from "./src/routes/auctions.js";
 
 export const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 5000;
 
 // Resolve paths relative to this server.js file
 const __filename = fileURLToPath(import.meta.url);
