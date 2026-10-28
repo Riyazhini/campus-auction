@@ -1,0 +1,155 @@
+
+# Campus Auction — Business Rules
+
+## 1. Purpose
+
+This document defines the business rules for auction creation, bidding,
+auction closure, approval, and completion. These rules must be enforced
+by the backend and reflected in the frontend.
+
+## 2. Bidding Rules
+
+1. Every auction must have a starting price, a minimum bid increment,
+   and a closing date and time.
+2. The first valid bid must be greater than or equal to the starting price.
+3. Every subsequent valid bid must be greater than or equal to the
+   current highest bid plus the minimum bid increment.
+4. The current price is the highest valid bid recorded for the auction.
+5. A bidder cannot submit a bid below the required minimum.
+6. A bid must be associated with an existing auction and an authenticated
+   bidder.
+7. Invalid bids must be rejected by the server with a clear error message.
+8. Once accepted, a bid must be recorded with its bidder, amount,
+   and server-generated timestamp.
+9. Accepted bids are retained in the bidding history and cannot be
+   silently modified or deleted.
+10. When simultaneous bids are submitted, the server must process them
+    safely so that no accepted bid violates the minimum increment rule.
+
+## 3. Auction Closing Rules
+
+1. Each auction has a closing date and time.
+2. The server is the authoritative source for the current time.
+3. A bid is accepted only if the auction is active and the server time
+   is earlier than the closing time when the bid is validated.
+4. A bid submitted at or after the closing time must be rejected.
+5. The browser clock must never determine whether a bid is valid.
+6. When the closing time is reached, the auction must stop accepting bids.
+7. An auction with at least one valid bid proceeds to the approval workflow.
+8. An auction with no valid bids after closing becomes unsold.
+9. Auction closure and bid validation must be enforced on the backend,
+   even if the frontend has not refreshed.
+
+## 4. Auction States
+
+### 4.1 Active
+
+The auction is open for bidding. Valid bids may be accepted until
+the closing time, provided all bidding rules are satisfied.
+
+### 4.2 Closed
+
+The auction has ended and no additional bids are accepted.
+The server determines whether the auction has valid bids.
+
+### 4.3 Pending Approval
+
+The auction has closed with at least one valid bid and is waiting
+for an authorized reviewer to decide the outcome.
+
+### 4.4 Approved
+
+The proposed auction outcome and winning bid have been approved.
+The transaction can proceed to the pickup or handover stage.
+
+### 4.5 Rejected
+
+The proposed auction outcome or winning bid has been rejected
+by an authorized reviewer. The auction cannot be completed
+unless an explicitly defined recovery process is introduced.
+
+### 4.6 Completed
+
+The approved auction transaction has been successfully completed
+and the item handover has been confirmed.
+
+### 4.7 Failed Pickup
+
+The approved transaction could not be completed because the
+required pickup or handover failed according to the applicable policy.
+
+### 4.8 Unsold
+
+The auction closed without any valid bids.
+
+### 4.9 Cancelled
+
+The auction was cancelled by an authorized user according to
+the cancellation policy. A cancelled auction cannot accept bids.
+
+## 5. State Transitions
+
+The expected state transitions are:
+
+- Active -> Closed
+- Active -> Cancelled
+- Closed -> Pending Approval (if valid bids exist)
+- Closed -> Unsold (if no valid bids exist)
+- Pending Approval -> Approved
+- Pending Approval -> Rejected
+- Approved -> Completed (if pickup succeeds)
+- Approved -> Failed Pickup (if pickup fails)
+
+Only permitted transitions may be performed. Every state change
+must be validated by the backend and recorded in the auction history.
+
+Rejected, Unsold, Completed, Failed Pickup, and Cancelled are terminal
+states in the initial version. Any reopening or retry process must be
+explicitly defined before implementation.
+
+## 6. Public Bidding History
+
+1. All accepted bids are publicly visible to users who can view the auction.
+2. Each bid entry must display:
+   - Bidder's public display name or username
+   - Bid amount
+   - Server-recorded bid timestamp
+3. Bids must be displayed in chronological order or another clearly
+   documented order.
+4. The auction page must show the current highest valid bid.
+5. Rejected bids must not appear as accepted bids in the public history.
+6. Private information such as passwords, authentication tokens,
+   email addresses, and contact details must not be exposed in
+   public bidding history.
+
+## 7. Backend Enforcement
+
+1. All bid validation must happen on the server.
+2. The server must verify the auction state, closing time, starting price,
+   current highest bid, and minimum increment before accepting a bid.
+3. Bid creation and highest-bid updates must be handled atomically
+   to prevent race conditions.
+4. The server must prevent unauthorized users from approving,
+   rejecting, or cancelling auctions.
+5. Auction state transitions must be validated against the permitted
+   transition rules.
+6. The server must generate authoritative timestamps for bids and
+   state changes.
+7. Monetary values must use a precise representation suitable for
+   currency calculations, not floating-point arithmetic.
+
+## 8. Assumptions and Policies to Finalize
+
+Before implementation, decide:
+
+- Whether sellers can bid on their own auctions.
+- Whether bidders can place multiple consecutive bids.
+- Who is authorized to approve or reject an auction outcome.
+- What happens after a winning bidder fails to collect an item.
+- Whether a rejected outcome can be reviewed or reopened.
+- Who can cancel an auction and under what conditions.
+- Whether auction extensions are allowed near closing time.
+- The currency, rounding rules, and minimum increment configuration.
+
+Until these policies are finalized, the backend must not introduce
+implicit behavior that contradicts the documented bidding rules.
