@@ -9,7 +9,8 @@ items. The project uses a React frontend, an Express API, and SQLite.
 - Create, edit, and cancel auction listings with up to five photos
 - Browse and filter active auctions; inspect listing details and public bid history
 - Place bids with server-side validation and serialized SQLite transactions
-- Expired auctions settle to pending approval or unsold on the next API read or bid attempt
+- Expired auctions close on reads or bid attempts, selecting a provisional winner or marking the auction unsold
+- Auction state changes and outcome notes are recorded in an event history
 
 ## Requirements
 
@@ -85,6 +86,11 @@ Create React App can produce a production build with `npm run build`.
 Price values are stored as positive whole numbers; the project has not yet
 specified a currency. The “closing soon” filter means auctions closing in the
 next 24 hours. Sellers cannot bid on their own listings.
+
+Expired active auctions are settled on auction list/detail reads and late bid
+attempts. The highest valid bid is stored as the provisional winner and moves
+the auction to `pending_approval`; an auction without bids becomes `unsold`.
+The auction detail response includes a chronological `events` history.
 
 See [docs/rules.md](docs/rules.md) for the auction state machine and business
 rules.

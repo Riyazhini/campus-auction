@@ -48,11 +48,15 @@ function getAuction(auctionId) {
       a.min_increment,
       a.closes_at,
       a.status,
+      a.winner_id,
+      a.winning_amount,
       a.outcome_note,
       a.created_at,
-      u.name AS seller_name
+      u.name AS seller_name,
+      winner.name AS winner_name
     FROM auctions a
     JOIN users u ON u.id = a.seller_id
+    LEFT JOIN users winner ON winner.id = a.winner_id
     WHERE a.id = ?
   `).get(auctionId);
 
@@ -66,8 +70,109 @@ function getAuction(auctionId) {
     WHERE auction_id = ?
     ORDER BY id
   `).all(auctionId);
+  const events = db.prepare(`
+    SELECT
+      e.id,
+      e.event_type,
+      e.from_status,
+      e.to_status,
+      e.note,
+      e.created_at,
+      u.name AS actor_name
+    FROM auction_events e
+    LEFT JOIN users u ON u.id = e.actor_id
+    WHERE e.auction_id = ?
+    ORDER BY e.created_at ASC, e.id ASC
+  `).all(auctionId);
 
-  return { ...auction, photos };
+  return { ...auction, photos, events };
+}
+
+function recordAuctionEvent({
+  auctionId,
+  actorId = null,
+  eventType,
+  fromStatus = null,
+  toStatus = null,
+  note = null,
+}) {
+  db.prepare(`
+    INSERT INTO auction_events (
+      auction_id, actor_id, event_type, from_status, to_status, note
+    )
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(auctionId, actorId, eventType, fromStatus, toStatus, note);
+}
+
+function settleExpiredAuction(auctionId) {
+  const auction = db.prepare(`
+    SELECT status, closes_at FROM auctions WHERE id = ?
+  `).get(auctionId);
+
+  if (
+    !auction ||
+    auction.status !== "active" ||
+    Date.parse(auction.closes_at) > Date.now()
+  ) {
+    return auction?.status ?? null;
+  }
+
+  const closeResult = db.prepare(`
+    UPDATE auctions
+    SET status = 'closed'
+    WHERE id = ? AND status = 'active'
+      AND julianday(closes_at) <= julianday('now')
+  `).run(auctionId);
+
+  if (closeResult.changes === 0) {
+    return db.prepare(`
+      SELECT status FROM auctions WHERE id = ?
+    `).get(auctionId)?.status ?? null;
+  }
+
+  recordAuctionEvent({
+    auctionId,
+    eventType: "auction_closed",
+    fromStatus: "active",
+    toStatus: "closed",
+    note: "Bidding has ended.",
+  });
+
+  const leadingBid = db.prepare(`
+    SELECT bidder_id, amount
+    FROM bids
+    WHERE auction_id = ?
+    ORDER BY amount DESC, id ASC
+    LIMIT 1
+  `).get(auctionId);
+  const status = leadingBid ? "pending_approval" : "unsold";
+  const result = db.prepare(`
+    UPDATE auctions
+    SET status = ?, winner_id = ?, winning_amount = ?
+    WHERE id = ? AND status = 'closed'
+      AND julianday(closes_at) <= julianday('now')
+  `).run(
+    status,
+    leadingBid?.bidder_id ?? null,
+    leadingBid?.amount ?? null,
+    auctionId
+  );
+
+  if (result.changes > 0) {
+    recordAuctionEvent({
+      auctionId,
+      eventType: status === "unsold"
+        ? "auction_unsold"
+        : "provisional_winner_selected",
+      fromStatus: "closed",
+      toStatus: status,
+      note: leadingBid
+        ? `Provisional winner selected at ${leadingBid.amount}.`
+        : "Auction closed without valid bids.",
+    });
+  }
+
+  return status;
 }
 
 function closeExpiredAuctions(auctionId = null) {
@@ -79,33 +184,9 @@ function closeExpiredAuctions(auctionId = null) {
         AND julianday(closes_at) <= julianday('now')
         AND (? IS NULL OR id = ?)
     `).all(auctionId, auctionId);
-    const markClosed = db.prepare(`
-      UPDATE auctions
-      SET status = 'closed'
-      WHERE id = ? AND status = 'active'
-    `);
-    const selectLeadingBid = db.prepare(`
-      SELECT bidder_id, amount
-      FROM bids
-      WHERE auction_id = ?
-      ORDER BY amount DESC, id ASC
-      LIMIT 1
-    `);
-    const settle = db.prepare(`
-      UPDATE auctions
-      SET status = ?, winner_id = ?, winning_amount = ?
-      WHERE id = ? AND status = 'closed'
-    `);
 
     for (const auction of expiredAuctions) {
-      markClosed.run(auction.id);
-      const leadingBid = selectLeadingBid.get(auction.id);
-      settle.run(
-        leadingBid ? "pending_approval" : "unsold",
-        leadingBid?.bidder_id ?? null,
-        leadingBid?.amount ?? null,
-        auction.id
-      );
+      settleExpiredAuction(auction.id);
     }
   });
 
@@ -167,6 +248,13 @@ router.post(
             `/uploads/${file.filename}`
           );
         }
+
+        recordAuctionEvent({
+          auctionId,
+          actorId: req.user.id,
+          eventType: "listing_created",
+          toStatus: "active",
+        });
 
         return auctionId;
       });
@@ -456,6 +544,15 @@ router.post("/:id/cancel", authenticateToken, (req, res) => {
     });
   }
 
+  recordAuctionEvent({
+    auctionId,
+    actorId: req.user.id,
+    eventType: "auction_cancelled",
+    fromStatus: "active",
+    toStatus: "cancelled",
+    note: reason,
+  });
+
   return res.json({
     message: "Auction listing cancelled.",
     auction: getAuction(auctionId),
@@ -525,20 +622,7 @@ router.post("/:id/bids", authenticateToken, (req, res) => {
       }
 
       if (closesAt <= Date.now()) {
-        db.prepare(`
-          UPDATE auctions SET status = 'closed'
-          WHERE id = ? AND status = 'active'
-        `).run(auctionId);
-        db.prepare(`
-          UPDATE auctions
-          SET status = ?, winner_id = ?, winning_amount = ?
-          WHERE id = ? AND status = 'closed'
-        `).run(
-          leadingBid ? "pending_approval" : "unsold",
-          leadingBid?.bidder_id ?? null,
-          leadingBid?.amount ?? null,
-          auctionId
-        );
+        settleExpiredAuction(auctionId);
         return {
           status: 409,
           message: "This auction has closed and is no longer accepting bids.",

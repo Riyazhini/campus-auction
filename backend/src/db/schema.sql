@@ -54,8 +54,22 @@ CREATE TABLE IF NOT EXISTS notifications (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS auction_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  auction_id INTEGER NOT NULL REFERENCES auctions(id),
+  actor_id INTEGER REFERENCES users(id),
+  event_type TEXT NOT NULL,
+  from_status TEXT,
+  to_status TEXT,
+  note TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_auctions_status_closes
   ON auctions(status, closes_at);
 
 CREATE INDEX IF NOT EXISTS idx_bids_auction
   ON bids(auction_id, amount DESC);
+
+CREATE INDEX IF NOT EXISTS idx_auction_events_auction
+  ON auction_events(auction_id, created_at, id);

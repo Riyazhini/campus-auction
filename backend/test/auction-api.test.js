@@ -248,6 +248,49 @@ test("auction APIs enforce management, browsing, and bid rules", async () => {
     assert.equal(pendingAuction.status, "pending_approval");
     assert.equal(pendingAuction.winner_id, Number(otherUser.lastInsertRowid));
     assert.equal(pendingAuction.winning_amount, 20);
+    const pendingDetailResponse = await fetch(
+      `${baseUrl}/${pendingAuctionId}`
+    );
+    const pendingDetail = (await pendingDetailResponse.json()).auction;
+    assert.equal(pendingDetail.winner_name, "Other user");
+    assert.equal(
+      pendingDetail.events.at(-2).event_type,
+      "auction_closed"
+    );
+    assert.equal(
+      pendingDetail.events.at(-1).event_type,
+      "provisional_winner_selected"
+    );
+    assert.equal(pendingDetail.events.at(-2).to_status, "closed");
+    assert.equal(pendingDetail.events.at(-1).to_status, "pending_approval");
+
+    const noBidCreateResponse = await fetch(baseUrl, {
+      method: "POST",
+      headers: {
+        ...auth(sellerToken),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        title: "Unused notebook",
+        category: "books",
+        description: "",
+        condition: "new",
+        starting_price: 10,
+        min_increment: 1,
+        closes_at: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+      }),
+    });
+    const noBidAuctionId =
+      (await noBidCreateResponse.json()).auction.id;
+    db.prepare("UPDATE auctions SET closes_at = ? WHERE id = ?")
+      .run(new Date(Date.now() - 1000).toISOString(), noBidAuctionId);
+    const readToCloseResponse = await fetch(`${baseUrl}/${noBidAuctionId}`);
+    const readToCloseAuction = (await readToCloseResponse.json()).auction;
+    assert.equal(readToCloseAuction.status, "unsold");
+    assert.equal(readToCloseAuction.winner_id, null);
+    assert.equal(readToCloseAuction.winning_amount, null);
+    assert.equal(readToCloseAuction.events.at(-1).event_type, "auction_unsold");
+    assert.equal(readToCloseAuction.events.at(-1).from_status, "closed");
 
     const lockedEditResponse = await fetch(`${baseUrl}/${created.id}`, {
       method: "PATCH",
@@ -284,6 +327,7 @@ test("auction APIs enforce management, browsing, and bid rules", async () => {
     const { auction: cancelled } = await cancelResponse.json();
     assert.equal(cancelled.status, "cancelled");
     assert.equal(cancelled.outcome_note, "Item is no longer available.");
+    assert.equal(cancelled.events.at(-1).event_type, "auction_cancelled");
 
     const remainingResponse = await fetch(baseUrl);
     const remaining = await remainingResponse.json();

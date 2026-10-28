@@ -40,8 +40,11 @@ by the backend and reflected in the frontend.
 9. Auction closure and bid validation must be enforced on the backend,
    even if the frontend has not refreshed.
 10. When an expired active auction is next read or receives a bid attempt,
-    the server settles it to `pending_approval` if it has bids, or `unsold`
-    if it has none. A bid attempt at or after the closing time is rejected.
+    the server closes it and selects the highest valid bid as the provisional
+    winner, moving it to `pending_approval`; an auction with no bids becomes
+    `unsold`. A bid attempt at or after the closing time is rejected.
+11. Closing and settlement run atomically. The same auction cannot be settled
+    twice, and every lifecycle transition is recorded in its event history.
 
 ## 4. Auction States
 
@@ -96,7 +99,8 @@ The expected state transitions are:
 
 - Active -> Closed
 - Active -> Cancelled
-- Closed -> Pending Approval (if valid bids exist)
+- Active -> Closed (when the closing time passes)
+- Closed -> Pending Approval (if valid bids exist; highest bid is provisional)
 - Closed -> Unsold (if no valid bids exist)
 - Pending Approval -> Approved
 - Pending Approval -> Rejected
@@ -152,6 +156,8 @@ explicitly defined before implementation.
    state changes.
 7. Monetary values must use a precise representation suitable for
    currency calculations, not floating-point arithmetic.
+8. Every listing creation and lifecycle outcome must be recorded with
+   actor, timestamp, status transition, and applicable outcome note.
 
 ## 9. Assumptions and Policies to Finalize
 
