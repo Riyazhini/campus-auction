@@ -77,13 +77,14 @@ defined recovery process is introduced.
 
 ### 4.6 Completed
 
-The approved auction transaction has been successfully completed
-and the item handover has been confirmed.
+The approved auction transaction has been successfully completed after
+both the seller and winning bidder confirm the campus handover.
 
 ### 4.7 Failed Pickup
 
 The approved transaction could not be completed because the
-required pickup or handover failed according to the applicable policy.
+required pickup or handover failed. Either the seller or winner can report
+the failure with a reason; the report records who submitted it.
 
 ### 4.8 Unsold
 
@@ -91,8 +92,9 @@ The auction closed without any valid bids.
 
 ### 4.9 Cancelled
 
-The auction was cancelled by an authorized user according to
-the cancellation policy. A cancelled auction cannot accept bids.
+An active listing can be cancelled by its seller. An approved sale can be
+cancelled by either the seller or winner with a reason. A cancelled auction
+cannot accept bids or proceed to handover.
 
 ## 5. State Transitions
 
@@ -105,7 +107,7 @@ The expected state transitions are:
 - Pending Approval -> Approved
 - Pending Approval -> Rejected
 - Approved -> Cancelled (seller or winner, with a reason)
-- Approved -> Completed (if pickup succeeds)
+- Approved -> Completed (only after seller and winner both confirm handover)
 - Approved -> Failed Pickup (if pickup fails)
 
 Only permitted transitions may be performed. Every state change
@@ -161,6 +163,10 @@ explicitly defined before implementation.
    actor, timestamp, status transition, and applicable outcome note.
 9. Only the listing seller may approve or reject a provisional winning bid.
    Rejection requires a recorded reason.
+10. Only the seller and provisional winner can confirm handover. Each party
+    can confirm once; the second distinct confirmation completes the sale.
+11. Only the seller or winner of an approved sale can report failed pickup
+    or cancel the transaction, and both outcomes require a non-empty reason.
 
 ## 9. Assumptions and Policies to Finalize
 

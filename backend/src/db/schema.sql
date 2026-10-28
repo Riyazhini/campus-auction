@@ -65,6 +65,13 @@ CREATE TABLE IF NOT EXISTS auction_events (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS handover_confirmations (
+  auction_id INTEGER NOT NULL REFERENCES auctions(id),
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  confirmed_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (auction_id, user_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_auctions_status_closes
   ON auctions(status, closes_at);
 
@@ -73,3 +80,6 @@ CREATE INDEX IF NOT EXISTS idx_bids_auction
 
 CREATE INDEX IF NOT EXISTS idx_auction_events_auction
   ON auction_events(auction_id, created_at, id);
+
+CREATE INDEX IF NOT EXISTS idx_handover_confirmations_auction
+  ON handover_confirmations(auction_id, confirmed_at);

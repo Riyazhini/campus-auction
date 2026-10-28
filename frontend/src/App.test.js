@@ -17,6 +17,7 @@ const auction = {
   winner_id: 8,
   winner_name: "Sam",
   winning_amount: 450,
+  handover_confirmations: [],
   created_at: new Date().toISOString(),
   seller_name: "Riya",
   primary_photo: null,
@@ -48,7 +49,7 @@ let currentAuction;
 beforeEach(() => {
   window.localStorage.clear();
   currentAuction = auction;
-  fetchMock = jest.fn(async (url) => {
+  fetchMock = jest.fn(async (url, options = {}) => {
     const path = new URL(url).pathname;
     if (path.endsWith("/mine")) {
       return response({ auctions: [currentAuction] });
@@ -64,6 +65,62 @@ beforeEach(() => {
         outcome_note: "The item cannot be handed over.",
       };
       return response({ auction: currentAuction });
+    }
+    if (path.endsWith("/handover/confirm")) {
+      const currentAuth = JSON.parse(
+        window.localStorage.getItem("campus-auction-auth")
+      );
+      const userId = currentAuth.user.id;
+      const handoverConfirmations = [
+        ...currentAuction.handover_confirmations,
+      ];
+      if (!handoverConfirmations.some((item) => item.user_id === userId)) {
+        handoverConfirmations.push({ user_id: userId, name: currentAuth.user.name });
+      }
+      const bothConfirmed =
+        handoverConfirmations.some(
+          (item) => item.user_id === currentAuction.seller_id
+        ) &&
+        handoverConfirmations.some(
+          (item) => item.user_id === currentAuction.winner_id
+        );
+      currentAuction = {
+        ...currentAuction,
+        handover_confirmations: handoverConfirmations,
+        ...(bothConfirmed
+          ? {
+              status: "completed",
+              outcome_note: "Campus handover confirmed by seller and winner.",
+            }
+          : {}),
+      };
+      return response({
+        message: bothConfirmed
+          ? "Campus handover completed. Both parties have confirmed."
+          : "Handover confirmation recorded. Waiting for the other party.",
+        auction: currentAuction,
+      });
+    }
+    if (path.endsWith("/failed-pickup")) {
+      const { reason } = JSON.parse(options.body);
+      currentAuction = {
+        ...currentAuction,
+        status: "failed_pickup",
+        outcome_note: reason,
+      };
+      return response({ message: "Failed pickup recorded.", auction: currentAuction });
+    }
+    if (path.endsWith("/transaction-cancel")) {
+      const { reason } = JSON.parse(options.body);
+      currentAuction = {
+        ...currentAuction,
+        status: "cancelled",
+        outcome_note: reason,
+      };
+      return response({
+        message: "Approved sale cancellation recorded.",
+        auction: currentAuction,
+      });
     }
     if (path.endsWith("/bids")) {
       return response({ message: "Bid placed successfully." });
@@ -182,6 +239,114 @@ test("seller rejection requires and displays an outcome reason", async () => {
     .toBeInTheDocument();
   expect(fetchMock).toHaveBeenCalledWith(
     expect.stringMatching(/\/api\/auctions\/1\/reject$/),
+    expect.objectContaining({ method: "POST" })
+  );
+});
+
+test("seller handover confirmation waits for the winner", async () => {
+  currentAuction = { ...auction, status: "approved" };
+  window.localStorage.setItem("campus-auction-auth", JSON.stringify({
+    token: "test-token",
+    user: { id: 7, name: "Riya" },
+  }));
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "My auctions" }));
+  await userEvent.click(await screen.findByRole("button", {
+    name: "View Graphing calculator",
+  }));
+  await userEvent.click(await screen.findByRole("button", {
+    name: "Confirm campus handover",
+  }));
+
+  expect(await screen.findByText("Handover confirmation recorded. Waiting for the other party."))
+    .toBeInTheDocument();
+  expect(screen.getByText("Seller · Riya").parentElement)
+    .toHaveTextContent("Confirmed");
+  expect(screen.getByText("Winner · Sam").parentElement)
+    .toHaveTextContent("Waiting");
+  expect(fetchMock).toHaveBeenCalledWith(
+    expect.stringMatching(/\/api\/auctions\/1\/handover\/confirm$/),
+    expect.objectContaining({ method: "POST" })
+  );
+});
+
+test("winner confirmation completes the approved campus handover", async () => {
+  currentAuction = {
+    ...auction,
+    status: "approved",
+    handover_confirmations: [{ user_id: 7, name: "Riya" }],
+  };
+  window.localStorage.setItem("campus-auction-auth", JSON.stringify({
+    token: "test-token",
+    user: { id: 8, name: "Sam" },
+  }));
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "My auctions" }));
+  await userEvent.click(await screen.findByRole("button", {
+    name: "View Graphing calculator",
+  }));
+  await userEvent.click(await screen.findByRole("button", {
+    name: "Confirm campus handover",
+  }));
+
+  expect(await screen.findByText("This auction is completed."))
+    .toBeInTheDocument();
+  expect(screen.getByText("Campus handover confirmed by seller and winner."))
+    .toBeInTheDocument();
+});
+
+test("an approved sale can record a failed pickup reason", async () => {
+  currentAuction = { ...auction, status: "approved" };
+  window.localStorage.setItem("campus-auction-auth", JSON.stringify({
+    token: "test-token",
+    user: { id: 8, name: "Sam" },
+  }));
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "My auctions" }));
+  await userEvent.click(await screen.findByRole("button", {
+    name: "View Graphing calculator",
+  }));
+  await userEvent.type(
+    await screen.findByLabelText("Failed pickup reason"),
+    "Pickup could not be completed."
+  );
+  await userEvent.click(screen.getByRole("button", {
+    name: "Record failed pickup",
+  }));
+
+  expect(await screen.findByText("This auction is failed pickup."))
+    .toBeInTheDocument();
+  expect(screen.getByText("Pickup could not be completed."))
+    .toBeInTheDocument();
+});
+
+test("an approved sale can be cancelled with a recorded reason", async () => {
+  currentAuction = { ...auction, status: "approved" };
+  window.localStorage.setItem("campus-auction-auth", JSON.stringify({
+    token: "test-token",
+    user: { id: 7, name: "Riya" },
+  }));
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "My auctions" }));
+  await userEvent.click(await screen.findByRole("button", {
+    name: "View Graphing calculator",
+  }));
+  await userEvent.type(
+    await screen.findByLabelText("Sale cancellation reason"),
+    "Both parties agreed to cancel."
+  );
+  await userEvent.click(screen.getByRole("button", {
+    name: "Cancel approved sale",
+  }));
+
+  expect(await screen.findByText("Both parties agreed to cancel."))
+    .toBeInTheDocument();
+  expect(fetchMock).toHaveBeenCalledWith(
+    expect.stringMatching(/\/api\/auctions\/1\/transaction-cancel$/),
     expect.objectContaining({ method: "POST" })
   );
 });

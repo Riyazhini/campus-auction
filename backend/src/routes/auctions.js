@@ -84,8 +84,23 @@ function getAuction(auctionId) {
     WHERE e.auction_id = ?
     ORDER BY e.created_at ASC, e.id ASC
   `).all(auctionId);
+  const handoverConfirmations = db.prepare(`
+    SELECT
+      h.user_id,
+      h.confirmed_at,
+      u.name
+    FROM handover_confirmations h
+    JOIN users u ON u.id = h.user_id
+    WHERE h.auction_id = ?
+    ORDER BY h.confirmed_at ASC, h.user_id ASC
+  `).all(auctionId);
 
-  return { ...auction, photos, events };
+  return {
+    ...auction,
+    photos,
+    events,
+    handover_confirmations: handoverConfirmations,
+  };
 }
 
 function recordAuctionEvent({
@@ -665,6 +680,204 @@ router.post("/:id/approve", authenticateToken, (req, res) =>
 
 router.post("/:id/reject", authenticateToken, (req, res) =>
   handleSellerDecision(req, res, "reject")
+);
+
+router.post("/:id/handover/confirm", authenticateToken, (req, res) => {
+  const auctionId = parseAuctionId(req.params.id);
+  if (!auctionId) {
+    return res.status(400).json({ message: "Invalid auction ID." });
+  }
+
+  try {
+    const result = db.transaction(() => {
+      const auction = db.prepare(`
+        SELECT seller_id, winner_id, status
+        FROM auctions
+        WHERE id = ?
+      `).get(auctionId);
+
+      if (!auction) {
+        return { status: 404, message: "Auction not found." };
+      }
+
+      if (![auction.seller_id, auction.winner_id].includes(req.user.id)) {
+        return {
+          status: 403,
+          message: "Only the seller and winning bidder can confirm handover.",
+        };
+      }
+
+      if (auction.status !== "approved") {
+        return {
+          status: 409,
+          message: "Only an approved auction can be handed over.",
+        };
+      }
+
+      const confirmation = db.prepare(`
+        INSERT OR IGNORE INTO handover_confirmations (auction_id, user_id)
+        VALUES (?, ?)
+      `).run(auctionId, req.user.id);
+      if (confirmation.changes > 0) {
+        const role = req.user.id === auction.seller_id ? "seller" : "winner";
+        recordAuctionEvent({
+          auctionId,
+          actorId: req.user.id,
+          eventType: `${role}_confirmed_handover`,
+          note: "Campus handover confirmation recorded.",
+        });
+      }
+
+      const confirmations = db.prepare(`
+        SELECT user_id, confirmed_at
+        FROM handover_confirmations
+        WHERE auction_id = ?
+      `).all(auctionId);
+      const bothConfirmed =
+        confirmations.some((item) => item.user_id === auction.seller_id) &&
+        confirmations.some((item) => item.user_id === auction.winner_id);
+
+      if (bothConfirmed) {
+        const result = db.prepare(`
+          UPDATE auctions
+          SET status = 'completed',
+            outcome_note = 'Campus handover confirmed by seller and winner.'
+          WHERE id = ? AND status = 'approved'
+        `).run(auctionId);
+        if (result.changes > 0) {
+          recordAuctionEvent({
+            auctionId,
+            actorId: req.user.id,
+            eventType: "campus_handover_completed",
+            fromStatus: "approved",
+            toStatus: "completed",
+            note: "Both seller and winning bidder confirmed campus handover.",
+          });
+        }
+      }
+
+      const completed = db.prepare(`
+        SELECT status FROM auctions WHERE id = ?
+      `).get(auctionId).status === "completed";
+      return {
+        status: 200,
+        message: completed
+          ? "Campus handover completed. Both parties have confirmed."
+          : confirmation.changes > 0
+            ? "Handover confirmation recorded. Waiting for the other party."
+            : "Your handover confirmation was already recorded.",
+        auction: getAuction(auctionId),
+      };
+    }).immediate();
+
+    const { status, ...payload } = result;
+    return res.status(status).json(payload);
+  } catch (error) {
+    console.error("Handover confirmation error:", error);
+    return res.status(500).json({
+      message: "Unable to record handover confirmation.",
+    });
+  }
+});
+
+function handleApprovedSaleOutcome(req, res, {
+  nextStatus,
+  eventType,
+  message,
+}) {
+  const auctionId = parseAuctionId(req.params.id);
+  if (!auctionId) {
+    return res.status(400).json({ message: "Invalid auction ID." });
+  }
+
+  const reason = typeof req.body?.reason === "string"
+    ? req.body.reason.trim()
+    : "";
+  if (!reason || reason.length > 1000) {
+    return res.status(400).json({
+      message: "Provide an outcome reason of 1 to 1000 characters.",
+    });
+  }
+
+  try {
+    const result = db.transaction(() => {
+      const auction = db.prepare(`
+        SELECT seller_id, winner_id, status
+        FROM auctions
+        WHERE id = ?
+      `).get(auctionId);
+
+      if (!auction) {
+        return { status: 404, message: "Auction not found." };
+      }
+
+      if (![auction.seller_id, auction.winner_id].includes(req.user.id)) {
+        return {
+          status: 403,
+          message: "Only the seller and winning bidder can record this outcome.",
+        };
+      }
+
+      if (auction.status !== "approved") {
+        return {
+          status: 409,
+          message: "Only an approved sale can receive this outcome.",
+        };
+      }
+
+      const update = db.prepare(`
+        UPDATE auctions
+        SET status = ?, outcome_note = ?
+        WHERE id = ? AND status = 'approved'
+      `).run(nextStatus, reason, auctionId);
+      if (update.changes === 0) {
+        return {
+          status: 409,
+          message: "This sale already has a final outcome.",
+        };
+      }
+
+      const role = req.user.id === auction.seller_id ? "Seller" : "Winning bidder";
+      recordAuctionEvent({
+        auctionId,
+        actorId: req.user.id,
+        eventType,
+        fromStatus: "approved",
+        toStatus: nextStatus,
+        note: `${role}: ${reason}`,
+      });
+
+      return {
+        status: 200,
+        message,
+        auction: getAuction(auctionId),
+      };
+    }).immediate();
+
+    const { status, ...payload } = result;
+    return res.status(status).json(payload);
+  } catch (error) {
+    console.error("Approved sale outcome error:", error);
+    return res.status(500).json({
+      message: "Unable to record the final sale outcome.",
+    });
+  }
+}
+
+router.post("/:id/failed-pickup", authenticateToken, (req, res) =>
+  handleApprovedSaleOutcome(req, res, {
+    nextStatus: "failed_pickup",
+    eventType: "pickup_failed",
+    message: "Failed pickup recorded.",
+  })
+);
+
+router.post("/:id/transaction-cancel", authenticateToken, (req, res) =>
+  handleApprovedSaleOutcome(req, res, {
+    nextStatus: "cancelled",
+    eventType: "approved_sale_cancelled",
+    message: "Approved sale cancellation recorded.",
+  })
 );
 
 router.post("/:id/bids", authenticateToken, (req, res) => {

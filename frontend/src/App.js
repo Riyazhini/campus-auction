@@ -408,6 +408,9 @@ function AuctionDetail({
   onCancelListing,
   onApprove,
   onReject,
+  onConfirmHandover,
+  onFailPickup,
+  onCancelApprovedSale,
   onPlaceBid,
   onSignIn,
   saving,
@@ -420,6 +423,8 @@ function AuctionDetail({
   const [cancelReason, setCancelReason] = useState("");
   const [cancelling, setCancelling] = useState(false);
   const [rejectionReason, setRejectionReason] = useState("");
+  const [pickupReason, setPickupReason] = useState("");
+  const [saleCancelReason, setSaleCancelReason] = useState("");
   const [bidAmount, setBidAmount] = useState("");
   const isSeller = user && user.id === auction.seller_id;
   const canManage = isSeller && auction.status === "active";
@@ -458,6 +463,20 @@ function AuctionDetail({
     event.preventDefault();
     if (await onReject(rejectionReason)) {
       setRejectionReason("");
+    }
+  }
+
+  async function submitPickupFailure(event) {
+    event.preventDefault();
+    if (await onFailPickup(pickupReason)) {
+      setPickupReason("");
+    }
+  }
+
+  async function submitApprovedSaleCancellation(event) {
+    event.preventDefault();
+    if (await onCancelApprovedSale(saleCancelReason)) {
+      setSaleCancelReason("");
     }
   }
 
@@ -710,6 +729,91 @@ function AuctionDetail({
               <p className="bid-notice">
                 Your bid is provisional and is awaiting the seller’s decision.
               </p>
+            )}
+          {auction.status === "approved" &&
+            (isSeller || auction.winner_id === user?.id) && (
+              <div className="seller-panel">
+                <p className="eyebrow">Campus handover</p>
+                <h2>Confirm the exchange</h2>
+                <p className="muted">
+                  The approved price is reserved for {auction.winner_name}.
+                  Both parties must confirm the handover to complete the sale.
+                </p>
+                {bidMessage && (
+                  <p className="bid-success" role="status">{bidMessage}</p>
+                )}
+                <ul className="handover-confirmations" aria-label="Handover confirmations">
+                  <li>
+                    <span>Seller · {auction.seller_name}</span>
+                    <strong>
+                      {auction.handover_confirmations.some(
+                        (confirmation) => confirmation.user_id === auction.seller_id
+                      ) ? "Confirmed" : "Waiting"}
+                    </strong>
+                  </li>
+                  <li>
+                    <span>Winner · {auction.winner_name}</span>
+                    <strong>
+                      {auction.handover_confirmations.some(
+                        (confirmation) => confirmation.user_id === auction.winner_id
+                      ) ? "Confirmed" : "Waiting"}
+                    </strong>
+                  </li>
+                </ul>
+                {!auction.handover_confirmations.some(
+                  (confirmation) => confirmation.user_id === user.id
+                ) && (
+                  <button
+                    className="button button-primary button-full"
+                    disabled={saving}
+                    onClick={onConfirmHandover}
+                  >
+                    {saving ? "Recording confirmation…" : "Confirm campus handover"}
+                  </button>
+                )}
+                <form
+                  className="cancel-listing-form"
+                  onSubmit={submitPickupFailure}
+                >
+                  <label className="field">
+                    Failed pickup reason
+                    <textarea
+                      value={pickupReason}
+                      onChange={(event) => setPickupReason(event.target.value)}
+                      maxLength="1000"
+                      rows="3"
+                      required
+                    />
+                  </label>
+                  <button
+                    className="button button-danger button-full"
+                    disabled={saving}
+                  >
+                    Record failed pickup
+                  </button>
+                </form>
+                <form
+                  className="cancel-listing-form"
+                  onSubmit={submitApprovedSaleCancellation}
+                >
+                  <label className="field">
+                    Sale cancellation reason
+                    <textarea
+                      value={saleCancelReason}
+                      onChange={(event) => setSaleCancelReason(event.target.value)}
+                      maxLength="1000"
+                      rows="3"
+                      required
+                    />
+                  </label>
+                  <button
+                    className="button button-secondary button-full"
+                    disabled={saving}
+                  >
+                    Cancel approved sale
+                  </button>
+                </form>
+              </div>
             )}
           {auction.outcome_note && (
             <div className="outcome-note">
@@ -977,6 +1081,30 @@ function App() {
     }
   }
 
+  async function recordSaleOutcome(action, reason = "") {
+    setSaving(true);
+    setError("");
+    try {
+      const result = await apiRequest(
+        `/auctions/${selectedAuctionId}/${action}`,
+        {
+          method: "POST",
+          token: auth.token,
+          body: action === "handover/confirm" ? {} : { reason },
+        }
+      );
+      setSelectedAuction(result.auction);
+      setBidMessage(result.message);
+      await loadMyAuctions();
+      return true;
+    } catch (requestError) {
+      setError(requestError.message);
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function placeBid(amount) {
     if (!auth) {
       setAuthMode("login");
@@ -1103,6 +1231,11 @@ function App() {
         onCancelListing={cancelListing}
         onApprove={() => decideWinningBid("approve")}
         onReject={(reason) => decideWinningBid("reject", reason)}
+        onConfirmHandover={() => recordSaleOutcome("handover/confirm")}
+        onFailPickup={(reason) => recordSaleOutcome("failed-pickup", reason)}
+        onCancelApprovedSale={(reason) =>
+          recordSaleOutcome("transaction-cancel", reason)
+        }
         onPlaceBid={placeBid}
         onSignIn={() => {
           setAuthMode("login");

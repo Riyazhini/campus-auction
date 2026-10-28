@@ -28,6 +28,10 @@ test("auction APIs enforce management, browsing, and bid rules", async () => {
     INSERT INTO users (name, email, password_hash)
     VALUES (?, ?, ?)
   `).run("Other user", "other@campus.test", "unused");
+  const outsider = db.prepare(`
+    INSERT INTO users (name, email, password_hash)
+    VALUES (?, ?, ?)
+  `).run("Outside user", "outside@campus.test", "unused");
   const sellerToken = jwt.sign(
     { id: Number(seller.lastInsertRowid) },
     process.env.JWT_SECRET
@@ -36,12 +40,55 @@ test("auction APIs enforce management, browsing, and bid rules", async () => {
     { id: Number(otherUser.lastInsertRowid) },
     process.env.JWT_SECRET
   );
+  const outsiderToken = jwt.sign(
+    { id: Number(outsider.lastInsertRowid) },
+    process.env.JWT_SECRET
+  );
   const server = app.listen(0, "127.0.0.1");
 
   try {
     await new Promise((resolve) => server.once("listening", resolve));
     const baseUrl = `http://127.0.0.1:${server.address().port}/api/auctions`;
     const auth = (token) => ({ authorization: `Bearer ${token}` });
+    const createApprovedSale = async (title) => {
+      const createResponse = await fetch(baseUrl, {
+        method: "POST",
+        headers: {
+          ...auth(sellerToken),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          title,
+          category: "stationery",
+          description: "",
+          condition: "good",
+          starting_price: 10,
+          min_increment: 1,
+          closes_at: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+        }),
+      });
+      assert.equal(createResponse.status, 201);
+      const auctionId = (await createResponse.json()).auction.id;
+      db.prepare(`
+        INSERT INTO bids (auction_id, bidder_id, amount)
+        VALUES (?, ?, ?)
+      `).run(auctionId, Number(otherUser.lastInsertRowid), 10);
+      db.prepare("UPDATE auctions SET closes_at = ? WHERE id = ?")
+        .run(new Date(Date.now() - 1000).toISOString(), auctionId);
+      await fetch(`${baseUrl}/${auctionId}`);
+      const approvalResponse = await fetch(
+        `${baseUrl}/${auctionId}/approve`,
+        {
+          method: "POST",
+          headers: {
+            ...auth(sellerToken),
+            "content-type": "application/json",
+          },
+        }
+      );
+      assert.equal(approvalResponse.status, 200);
+      return auctionId;
+    };
     const createResponse = await fetch(baseUrl, {
       method: "POST",
       headers: {
@@ -291,6 +338,97 @@ test("auction APIs enforce management, browsing, and bid rules", async () => {
     assert.equal(approvedAuction.winner_id, Number(otherUser.lastInsertRowid));
     assert.equal(approvedAuction.winning_amount, 20);
     assert.equal(approvedAuction.events.at(-1).to_status, "approved");
+    const sellerHandoverConfirmation = await fetch(
+      `${baseUrl}/${pendingAuctionId}/handover/confirm`,
+      {
+        method: "POST",
+        headers: {
+          ...auth(sellerToken),
+          "content-type": "application/json",
+        },
+      }
+    );
+    assert.equal(sellerHandoverConfirmation.status, 200);
+    const sellerConfirmationResult =
+      await sellerHandoverConfirmation.json();
+    assert.equal(
+      sellerConfirmationResult.auction.status,
+      "approved"
+    );
+    assert.equal(
+      sellerConfirmationResult.auction.handover_confirmations.length,
+      1
+    );
+    assert.match(
+      sellerConfirmationResult.message,
+      /Waiting for the other party/
+    );
+    const repeatedSellerConfirmation = await fetch(
+      `${baseUrl}/${pendingAuctionId}/handover/confirm`,
+      {
+        method: "POST",
+        headers: {
+          ...auth(sellerToken),
+          "content-type": "application/json",
+        },
+      }
+    );
+    assert.equal(repeatedSellerConfirmation.status, 200);
+    assert.equal(
+      (await repeatedSellerConfirmation.json()).auction.events.filter(
+        (event) => event.event_type === "seller_confirmed_handover"
+      ).length,
+      1
+    );
+    const unauthorizedConfirmation = await fetch(
+      `${baseUrl}/${pendingAuctionId}/handover/confirm`,
+      {
+        method: "POST",
+        headers: {
+          ...auth(outsiderToken),
+          "content-type": "application/json",
+        },
+      }
+    );
+    assert.equal(unauthorizedConfirmation.status, 403);
+    const winnerHandoverConfirmation = await fetch(
+      `${baseUrl}/${pendingAuctionId}/handover/confirm`,
+      {
+        method: "POST",
+        headers: {
+          ...auth(otherToken),
+          "content-type": "application/json",
+        },
+      }
+    );
+    assert.equal(winnerHandoverConfirmation.status, 200);
+    const completedAuction =
+      (await winnerHandoverConfirmation.json()).auction;
+    assert.equal(completedAuction.status, "completed");
+    assert.equal(
+      completedAuction.outcome_note,
+      "Campus handover confirmed by seller and winner."
+    );
+    assert.equal(completedAuction.handover_confirmations.length, 2);
+    assert.equal(
+      completedAuction.events.at(-1).event_type,
+      "campus_handover_completed"
+    );
+    assert.equal(completedAuction.events.at(-1).from_status, "approved");
+    assert.equal(completedAuction.events.at(-1).to_status, "completed");
+    const latePickupReport = await fetch(
+      `${baseUrl}/${pendingAuctionId}/failed-pickup`,
+      {
+        method: "POST",
+        headers: {
+          ...auth(otherToken),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ reason: "The pickup did not happen." }),
+      }
+    );
+    assert.equal(latePickupReport.status, 409);
+
     const duplicateApproval = await fetch(
       `${baseUrl}/${pendingAuctionId}/approve`,
       {
@@ -358,6 +496,94 @@ test("auction APIs enforce management, browsing, and bid rules", async () => {
       rejectedAuction.outcome_note,
       "The item cannot be handed over."
     );
+    assert.equal(rejectedAuction.events.at(-1).event_type, "seller_rejected_winning_bid");
+    assert.equal(rejectedAuction.events.at(-1).note, "The item cannot be handed over.");
+
+    const failedPickupAuctionId =
+      await createApprovedSale("Failed pickup calculator");
+    const missingPickupReason = await fetch(
+      `${baseUrl}/${failedPickupAuctionId}/failed-pickup`,
+      {
+        method: "POST",
+        headers: {
+          ...auth(otherToken),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ reason: " " }),
+      }
+    );
+    assert.equal(missingPickupReason.status, 400);
+    const outsiderPickupReport = await fetch(
+      `${baseUrl}/${failedPickupAuctionId}/failed-pickup`,
+      {
+        method: "POST",
+        headers: {
+          ...auth(outsiderToken),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ reason: "Pickup failed." }),
+      }
+    );
+    assert.equal(outsiderPickupReport.status, 403);
+    const failedPickupResponse = await fetch(
+      `${baseUrl}/${failedPickupAuctionId}/failed-pickup`,
+      {
+        method: "POST",
+        headers: {
+          ...auth(otherToken),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ reason: "The winner could not attend." }),
+      }
+    );
+    assert.equal(failedPickupResponse.status, 200);
+    const failedPickup = (await failedPickupResponse.json()).auction;
+    assert.equal(failedPickup.status, "failed_pickup");
+    assert.equal(
+      failedPickup.outcome_note,
+      "The winner could not attend."
+    );
+    assert.equal(failedPickup.events.at(-1).event_type, "pickup_failed");
+    assert.equal(
+      failedPickup.events.at(-1).note,
+      "Winning bidder: The winner could not attend."
+    );
+    const duplicatePickupReport = await fetch(
+      `${baseUrl}/${failedPickupAuctionId}/failed-pickup`,
+      {
+        method: "POST",
+        headers: {
+          ...auth(sellerToken),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ reason: "The seller could not attend." }),
+      }
+    );
+    assert.equal(duplicatePickupReport.status, 409);
+
+    const cancelledSaleId = await createApprovedSale("Cancelled campus sale");
+    const cancelledSaleResponse = await fetch(
+      `${baseUrl}/${cancelledSaleId}/transaction-cancel`,
+      {
+        method: "POST",
+        headers: {
+          ...auth(sellerToken),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ reason: "Both parties agreed to cancel." }),
+      }
+    );
+    assert.equal(cancelledSaleResponse.status, 200);
+    const cancelledSale = (await cancelledSaleResponse.json()).auction;
+    assert.equal(cancelledSale.status, "cancelled");
+    assert.equal(
+      cancelledSale.outcome_note,
+      "Both parties agreed to cancel."
+    );
+    assert.equal(
+      cancelledSale.events.at(-1).event_type,
+      "approved_sale_cancelled"
+    );
 
     const myAuctionsResponse = await fetch(`${baseUrl}/mine`, {
       headers: auth(otherToken),
@@ -366,7 +592,12 @@ test("auction APIs enforce management, browsing, and bid rules", async () => {
     const myAuctions = await myAuctionsResponse.json();
     assert.deepEqual(
       myAuctions.auctions.map((item) => item.id).sort((a, b) => a - b),
-      [pendingAuctionId, rejectAuctionId].sort((a, b) => a - b)
+      [
+        pendingAuctionId,
+        rejectAuctionId,
+        failedPickupAuctionId,
+        cancelledSaleId,
+      ].sort((a, b) => a - b)
     );
 
     const noBidCreateResponse = await fetch(baseUrl, {
