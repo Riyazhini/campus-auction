@@ -233,6 +233,22 @@ test("auction APIs enforce management, browsing, and bid rules", async () => {
     const { auction: afterBids } = await afterBidsResponse.json();
     assert.equal(afterBids.current_price, 170);
     assert.equal(afterBids.bids.length, 2);
+    const editAfterBidsResponse = await fetch(`${baseUrl}/${created.id}`, {
+      method: "PATCH",
+      headers: {
+        ...auth(sellerToken),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ description: "Updated with full detail response" }),
+    });
+    assert.equal(editAfterBidsResponse.status, 200);
+    const editedAfterBids =
+      (await editAfterBidsResponse.json()).auction;
+    assert.equal(editedAfterBids.description, "Updated with full detail response");
+    assert.equal(editedAfterBids.bids.length, 2);
+    assert.equal(editedAfterBids.leading_bid.amount, 170);
+    assert.equal(editedAfterBids.current_price, 170);
+    assert.deepEqual(editedAfterBids.handover_confirmations, []);
 
     const textbookId = (await textbookResponse.json()).auction.id;
     db.prepare("UPDATE auctions SET closes_at = ? WHERE id = ?")

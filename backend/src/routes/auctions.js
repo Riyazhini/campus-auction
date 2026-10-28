@@ -94,12 +94,30 @@ function getAuction(auctionId) {
     WHERE h.auction_id = ?
     ORDER BY h.confirmed_at ASC, h.user_id ASC
   `).all(auctionId);
+  const bids = db.prepare(`
+    SELECT b.id, b.amount, b.created_at, u.name AS bidder_name
+    FROM bids b
+    JOIN users u ON u.id = b.bidder_id
+    WHERE b.auction_id = ?
+    ORDER BY b.created_at ASC, b.id ASC
+  `).all(auctionId);
+  const leadingBid = db.prepare(`
+    SELECT b.id, b.amount, b.created_at, u.name AS bidder_name
+    FROM bids b
+    JOIN users u ON u.id = b.bidder_id
+    WHERE b.auction_id = ?
+    ORDER BY b.amount DESC, b.id ASC
+    LIMIT 1
+  `).get(auctionId) ?? null;
 
   return {
     ...auction,
     photos,
     events,
     handover_confirmations: handoverConfirmations,
+    bids,
+    leading_bid: leadingBid,
+    current_price: leadingBid?.amount ?? auction.starting_price,
   };
 }
 
@@ -1188,30 +1206,7 @@ router.get("/:id", (req, res) => {
     });
   }
 
-  const bids = db.prepare(`
-    SELECT b.id, b.amount, b.created_at, u.name AS bidder_name
-    FROM bids b
-    JOIN users u ON u.id = b.bidder_id
-    WHERE b.auction_id = ?
-    ORDER BY b.created_at ASC, b.id ASC
-  `).all(auctionId);
-  const leadingBid = db.prepare(`
-    SELECT b.id, b.amount, b.created_at, u.name AS bidder_name
-    FROM bids b
-    JOIN users u ON u.id = b.bidder_id
-    WHERE b.auction_id = ?
-    ORDER BY b.amount DESC, b.id ASC
-    LIMIT 1
-  `).get(auctionId) ?? null;
-
-  return res.json({
-    auction: {
-      ...auction,
-      bids,
-      leading_bid: leadingBid,
-      current_price: leadingBid?.amount ?? auction.starting_price,
-    },
-  });
+  return res.json({ auction });
 });
 
 export default router;

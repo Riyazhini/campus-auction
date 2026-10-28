@@ -430,6 +430,7 @@ function AuctionDetail({
   const canManage = isSeller && auction.status === "active";
   const canBid = auction.status === "active" &&
     Date.parse(auction.closes_at) > Date.now();
+  const handoverConfirmations = auction.handover_confirmations ?? [];
   const minimumBid = auction.leading_bid
     ? auction.current_price + auction.min_increment
     : auction.starting_price;
@@ -746,7 +747,7 @@ function AuctionDetail({
                   <li>
                     <span>Seller · {auction.seller_name}</span>
                     <strong>
-                      {auction.handover_confirmations.some(
+                      {handoverConfirmations.some(
                         (confirmation) => confirmation.user_id === auction.seller_id
                       ) ? "Confirmed" : "Waiting"}
                     </strong>
@@ -754,13 +755,13 @@ function AuctionDetail({
                   <li>
                     <span>Winner · {auction.winner_name}</span>
                     <strong>
-                      {auction.handover_confirmations.some(
+                      {handoverConfirmations.some(
                         (confirmation) => confirmation.user_id === auction.winner_id
                       ) ? "Confirmed" : "Waiting"}
                     </strong>
                   </li>
                 </ul>
-                {!auction.handover_confirmations.some(
+                {!handoverConfirmations.some(
                   (confirmation) => confirmation.user_id === user.id
                 ) && (
                   <button

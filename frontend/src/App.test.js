@@ -20,7 +20,7 @@ const auction = {
   handover_confirmations: [],
   created_at: new Date().toISOString(),
   seller_name: "Riya",
-  primary_photo: null,
+  primary_photo: "/uploads/test-photo.jpg",
   photos: [],
   leading_bid: {
     id: 2,
@@ -152,6 +152,10 @@ test("shows current campus auctions", async () => {
     .toBeInTheDocument();
   expect(screen.getByText("Graphing calculator")).toBeInTheDocument();
   expect(screen.getByText("450")).toBeInTheDocument();
+  const listingImage = document.querySelector(".card-image img");
+  expect(listingImage).not.toBeNull();
+  expect(listingImage).toHaveAttribute("src", expect.stringContaining("test-photo.jpg"));
+  expect(listingImage.parentElement).toHaveClass("card-image-button");
 });
 
 test("auction detail includes the leading bid, bid history, and countdown", async () => {
@@ -187,6 +191,32 @@ test("seller can open listing management controls", async () => {
     .toBeInTheDocument();
   expect(screen.getByLabelText("Starting price")).toBeDisabled();
   expect(screen.getByLabelText("Minimum bid increment")).toBeDisabled();
+});
+
+test("saving edited photos returns to a usable auction detail", async () => {
+  window.localStorage.setItem("campus-auction-auth", JSON.stringify({
+    token: "test-token",
+    user: { id: 7, name: "Riya" },
+  }));
+  render(<App />);
+
+  await userEvent.click(await screen.findByRole("button", {
+    name: "View Graphing calculator",
+  }));
+  await userEvent.click(await screen.findByRole("button", {
+    name: "Edit listing",
+  }));
+  expect(await screen.findByRole("heading", { name: "Edit listing" }))
+    .toBeInTheDocument();
+  const image = new File(["image data"], "calculator.png", {
+    type: "image/png",
+  });
+  await userEvent.upload(await screen.findByLabelText(/Add photos/), image);
+  await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+  expect(await screen.findByRole("heading", { name: "Bid history" }))
+    .toBeInTheDocument();
+  expect(screen.getByText("Led by Sam")).toBeInTheDocument();
 });
 
 test("seller can review and approve a provisional winning bid", async () => {

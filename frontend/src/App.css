@@ -387,6 +387,11 @@
   object-fit: cover;
 }
 
+.card-image img {
+  object-fit: contain;
+  background: #e9eee8;
+}
+
 .image-placeholder {
   display: grid;
   width: 100%;

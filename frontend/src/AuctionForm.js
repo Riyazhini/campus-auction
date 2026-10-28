@@ -55,6 +55,9 @@ function AuctionForm({
     const formData = new FormData();
 
     for (const [key, value] of Object.entries(values)) {
+      if (key === "closes_at" && auction && lockedAfterBid) {
+        continue;
+      }
       formData.append(
         key,
         key === "closes_at"
