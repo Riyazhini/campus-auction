@@ -19,6 +19,84 @@ function categoryLabel(value) {
   return value.replaceAll("_", " ");
 }
 
+function NotificationBell({
+  notifications,
+  unreadCount,
+  open,
+  error,
+  onToggle,
+  onSelect,
+  onReadChange,
+}) {
+  return (
+    <div className="notification-menu">
+      <button
+        className="notification-bell"
+        type="button"
+        aria-label={`Notifications${unreadCount ? `, ${unreadCount} unread` : ""}`}
+        aria-expanded={open}
+        onClick={onToggle}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" />
+          <path d="M10 21h4" />
+        </svg>
+        {unreadCount > 0 && (
+          <span className="notification-count">
+            {unreadCount > 99 ? "99+" : unreadCount}
+          </span>
+        )}
+      </button>
+      {open && (
+        <section
+          className="notification-panel"
+          aria-label="Notifications"
+        >
+          <div className="notification-panel-heading">
+            <h2>Notifications</h2>
+            <span>{unreadCount} unread</span>
+          </div>
+          {error && <p className="notification-error" role="alert">{error}</p>}
+          {notifications.length === 0 ? (
+            <p className="notification-empty">You’re all caught up.</p>
+          ) : (
+            <ul className="notification-list">
+              {notifications.map((notification) => (
+                <li
+                  className={`notification-item${notification.is_read ? "" : " notification-unread"}`}
+                  key={notification.id}
+                >
+                  <button
+                    className="notification-open"
+                    type="button"
+                    onClick={() => onSelect(notification)}
+                  >
+                    <strong>{notification.auction_title || "Auction update"}</strong>
+                    <span>{notification.message}</span>
+                    <time dateTime={notification.created_at}>
+                      {formatDate(notification.created_at)}
+                    </time>
+                  </button>
+                  <button
+                    className="notification-read-toggle"
+                    type="button"
+                    onClick={() => onReadChange(
+                      notification,
+                      !notification.is_read
+                    )}
+                  >
+                    Mark as {notification.is_read ? "unread" : "read"}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
+    </div>
+  );
+}
+
 function AuthDialog({ mode, onModeChange, onClose, onSubmit, error }) {
   const dialogRef = useRef(null);
   const [values, setValues] = useState({
@@ -862,6 +940,10 @@ function App() {
   const [authError, setAuthError] = useState("");
   const [showAuth, setShowAuth] = useState(false);
   const [authMode, setAuthMode] = useState("login");
+  const [notifications, setNotifications] = useState([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [notificationsError, setNotificationsError] = useState("");
+  const [showNotifications, setShowNotifications] = useState(false);
   const closeAuthDialog = useCallback(() => setShowAuth(false), []);
 
   const loadAuctions = useCallback(async () => {
@@ -909,9 +991,38 @@ function App() {
     }
   }, [auth]);
 
+  const loadNotifications = useCallback(async () => {
+    if (!auth) {
+      setNotifications([]);
+      setUnreadCount(0);
+      setNotificationsError("");
+      return;
+    }
+
+    try {
+      const result = await apiRequest("/notifications", {
+        token: auth.token,
+      });
+      setNotifications(result.notifications);
+      setUnreadCount(result.unread_count);
+      setNotificationsError("");
+    } catch (requestError) {
+      setNotificationsError(requestError.message);
+    }
+  }, [auth]);
+
   useEffect(() => {
     loadAuctions();
   }, [loadAuctions]);
+
+  useEffect(() => {
+    if (!auth) {
+      return undefined;
+    }
+    loadNotifications();
+    const poll = window.setInterval(loadNotifications, 20000);
+    return () => window.clearInterval(poll);
+  }, [auth, loadNotifications]);
 
   useEffect(() => {
     if (!selectedAuctionId) {
@@ -994,7 +1105,33 @@ function App() {
     setAuth(null);
     setMyAuctions([]);
     setSelectedAuctionId(null);
+    setShowNotifications(false);
     setPage("browse");
+  }
+
+  async function changeNotificationReadStatus(notification, isRead) {
+    try {
+      await apiRequest(`/notifications/${notification.id}`, {
+        method: "PATCH",
+        token: auth.token,
+        body: { is_read: isRead },
+      });
+      await loadNotifications();
+    } catch (requestError) {
+      setNotificationsError(requestError.message);
+    }
+  }
+
+  async function openNotification(notification) {
+    if (!notification.is_read) {
+      await changeNotificationReadStatus(notification, true);
+    }
+    setShowNotifications(false);
+    if (notification.auction_id) {
+      setPage("browse");
+      setSelectedAuctionId(notification.auction_id);
+      setError("");
+    }
   }
 
   async function createListing(formData) {
@@ -1189,6 +1326,10 @@ function App() {
   }
 
   const hasActiveFilters = Object.values(filters).some(Boolean);
+  const auctionsByCategory = AUCTION_CATEGORIES.map((category) => ({
+    category,
+    auctions: auctions.filter((auction) => auction.category === category),
+  })).filter((group) => group.auctions.length > 0);
 
   const mainContent = page === "create" ? (
     <section className="page-section">
@@ -1324,13 +1465,24 @@ function App() {
             )}
           </div>
         ) : (
-          <div className="auction-grid">
-            {auctions.map((auction) => (
-              <AuctionCard
-                key={auction.id}
-                auction={auction}
-                onSelect={setSelectedAuctionId}
-              />
+          <div className="category-auction-groups">
+            {auctionsByCategory.map(({ category, auctions: categoryAuctions }) => (
+              <section
+                className="category-auction-section"
+                key={category}
+                aria-label={`${categoryLabel(category)} auctions`}
+              >
+                <h3>{categoryLabel(category)}</h3>
+                <div className="auction-grid">
+                  {categoryAuctions.map((auction) => (
+                    <AuctionCard
+                      key={auction.id}
+                      auction={auction}
+                      onSelect={setSelectedAuctionId}
+                    />
+                  ))}
+                </div>
+              </section>
             ))}
           </div>
         )}
@@ -1356,11 +1508,27 @@ function App() {
             + Sell an item
           </button>
           {auth ? (
-            <div className="user-menu">
-              <span className="user-avatar">{auth.user.name.slice(0, 1).toUpperCase()}</span>
-              <span className="user-name">{auth.user.name}</span>
-              <button className="text-button" onClick={logout}>Sign out</button>
-            </div>
+            <>
+              <NotificationBell
+                notifications={notifications}
+                unreadCount={unreadCount}
+                open={showNotifications}
+                error={notificationsError}
+                onToggle={() => {
+                  setShowNotifications((isOpen) => !isOpen);
+                  if (!showNotifications) {
+                    loadNotifications();
+                  }
+                }}
+                onSelect={openNotification}
+                onReadChange={changeNotificationReadStatus}
+              />
+              <div className="user-menu">
+                <span className="user-avatar">{auth.user.name.slice(0, 1).toUpperCase()}</span>
+                <span className="user-name">{auth.user.name}</span>
+                <button className="text-button" onClick={logout}>Sign out</button>
+              </div>
+            </>
           ) : (
             <button
               className="nav-link nav-login"

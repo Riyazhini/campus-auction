@@ -15,6 +15,23 @@ function toLocalDateTime(value) {
     .slice(0, 16);
 }
 
+function getClosingParts(value) {
+  const [date = "", time = ""] = value.split("T");
+  const [rawHour = "00", minute = "00"] = time.split(":");
+  const hour = Number(rawHour);
+  return {
+    date,
+    hour: String(hour % 12 || 12),
+    minute,
+    period: hour >= 12 ? "PM" : "AM",
+  };
+}
+
+function toLocalDateTimeValue({ date, hour, minute, period }) {
+  const hour24 = (Number(hour) % 12) + (period === "PM" ? 12 : 0);
+  return `${date}T${String(hour24).padStart(2, "0")}:${minute}`;
+}
+
 function AuctionForm({
   auction,
   onSubmit,
@@ -23,6 +40,10 @@ function AuctionForm({
   submitting,
   lockedAfterBid = false,
 }) {
+  const initialClosing = toLocalDateTime(auction?.closes_at);
+  const [closingParts, setClosingParts] = useState(
+    () => getClosingParts(initialClosing)
+  );
   const [values, setValues] = useState(() => ({
     title: auction?.title || "",
     category: auction?.category || "",
@@ -30,16 +51,23 @@ function AuctionForm({
     condition: auction?.condition || "",
     starting_price: auction?.starting_price || "",
     min_increment: auction?.min_increment || "",
-    closes_at: toLocalDateTime(auction?.closes_at),
+    closes_at: initialClosing,
   }));
   const [photoIds, setPhotoIds] = useState(
     () => auction?.photos?.map((photo) => photo.id) || []
   );
   const [photos, setPhotos] = useState([]);
+  const [closingError, setClosingError] = useState("");
 
   function updateField(event) {
     const { name, value } = event.target;
     setValues((current) => ({ ...current, [name]: value }));
+  }
+
+  function updateClosingPart(event) {
+    const { name, value } = event.target;
+    setClosingParts((current) => ({ ...current, [name]: value }));
+    setClosingError("");
   }
 
   function togglePhoto(id) {
@@ -53,17 +81,24 @@ function AuctionForm({
   function handleSubmit(event) {
     event.preventDefault();
     const formData = new FormData();
+    const closingValue = toLocalDateTimeValue(closingParts);
+    if (
+      !(auction && lockedAfterBid) &&
+      new Date(closingValue).getTime() < Date.now() + 60 * 60 * 1000
+    ) {
+      setClosingError("Choose a closing time at least one hour from now.");
+      return;
+    }
 
     for (const [key, value] of Object.entries(values)) {
-      if (key === "closes_at" && auction && lockedAfterBid) {
+      if (key === "closes_at") {
         continue;
       }
-      formData.append(
-        key,
-        key === "closes_at"
-          ? new Date(value).toISOString()
-          : value
-      );
+      formData.append(key, value);
+    }
+
+    if (!(auction && lockedAfterBid)) {
+      formData.append("closes_at", new Date(closingValue).toISOString());
     }
 
     if (auction) {
@@ -153,19 +188,73 @@ function AuctionForm({
         </label>
 
         <label className="field">
-          Closing date and time
+          Closing date
           <input
-            name="closes_at"
-            type="datetime-local"
-            value={values.closes_at}
-            onChange={updateField}
-            min={!auction
-              ? toLocalDateTime(Date.now() + 60 * 60 * 1000)
-              : undefined}
+            name="date"
+            type="date"
+            value={closingParts.date}
+            onChange={updateClosingPart}
+            min={toLocalDateTime(Date.now() + 60 * 60 * 1000).slice(0, 10)}
             disabled={lockedAfterBid}
             required
           />
         </label>
+
+        <fieldset className="field field-wide closing-time-fieldset">
+          <legend>Closing time</legend>
+          <div className="closing-time-grid">
+            <label className="field">
+              Hour
+              <select
+                name="hour"
+                value={closingParts.hour}
+                onChange={updateClosingPart}
+                disabled={lockedAfterBid}
+                required
+              >
+                {Array.from({ length: 12 }, (_, index) =>
+                  String(index + 1)
+                ).map((hour) => (
+                  <option value={hour} key={hour}>{hour}</option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              Minute
+              <select
+                name="minute"
+                value={closingParts.minute}
+                onChange={updateClosingPart}
+                disabled={lockedAfterBid}
+                required
+              >
+                {Array.from({ length: 60 }, (_, minute) =>
+                  String(minute).padStart(2, "0")
+                ).map((minute) => (
+                  <option value={minute} key={minute}>{minute}</option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              AM/PM
+              <select
+                name="period"
+                value={closingParts.period}
+                onChange={updateClosingPart}
+                disabled={lockedAfterBid}
+                required
+              >
+                <option value="AM">AM</option>
+                <option value="PM">PM</option>
+              </select>
+            </label>
+          </div>
+        </fieldset>
+        {closingError && (
+          <p className="notice notice-error field-wide" role="alert">
+            {closingError}
+          </p>
+        )}
 
         <label className="field field-wide">
           Description

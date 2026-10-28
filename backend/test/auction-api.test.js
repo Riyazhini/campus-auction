@@ -49,6 +49,8 @@ test("auction APIs enforce management, browsing, and bid rules", async () => {
   try {
     await new Promise((resolve) => server.once("listening", resolve));
     const baseUrl = `http://127.0.0.1:${server.address().port}/api/auctions`;
+    const notificationsUrl =
+      `http://127.0.0.1:${server.address().port}/api/notifications`;
     const auth = (token) => ({ authorization: `Bearer ${token}` });
     const createApprovedSale = async (title) => {
       const createResponse = await fetch(baseUrl, {
@@ -155,6 +157,117 @@ test("auction APIs enforce management, browsing, and bid rules", async () => {
     assert.equal(detail.leading_bid.bidder_name, "Other user");
     assert.equal(detail.bids.length, 1);
     assert.equal("email" in detail.bids[0], false);
+
+    const notificationAuctionResponse = await fetch(baseUrl, {
+      method: "POST",
+      headers: {
+        ...auth(sellerToken),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        title: "Notification test item",
+        category: "books",
+        description: "",
+        condition: "good",
+        starting_price: 10,
+        min_increment: 1,
+        closes_at: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+      }),
+    });
+    const notificationAuctionId =
+      (await notificationAuctionResponse.json()).auction.id;
+    const firstNotificationBid = await fetch(
+      `${baseUrl}/${notificationAuctionId}/bids`,
+      {
+        method: "POST",
+        headers: {
+          ...auth(otherToken),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ amount: 10 }),
+      }
+    );
+    assert.equal(firstNotificationBid.status, 201);
+    const secondNotificationBid = await fetch(
+      `${baseUrl}/${notificationAuctionId}/bids`,
+      {
+        method: "POST",
+        headers: {
+          ...auth(outsiderToken),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ amount: 11 }),
+      }
+    );
+    assert.equal(secondNotificationBid.status, 201);
+    const outbidNotificationsResponse = await fetch(notificationsUrl, {
+      headers: auth(otherToken),
+    });
+    assert.equal(outbidNotificationsResponse.status, 200);
+    const outbidNotifications = await outbidNotificationsResponse.json();
+    assert.equal(outbidNotifications.unread_count, 1);
+    assert.equal(outbidNotifications.notifications.length, 1);
+    const [outbidNotification] = outbidNotifications.notifications;
+    assert.equal(outbidNotification.type, "outbid");
+    assert.equal(outbidNotification.auction_id, notificationAuctionId);
+    assert.equal(outbidNotification.is_read, 0);
+    assert.match(outbidNotification.message, /Notification test item/);
+    const unrelatedNotificationsResponse = await fetch(notificationsUrl, {
+      headers: auth(outsiderToken),
+    });
+    const unrelatedNotifications = await unrelatedNotificationsResponse.json();
+    assert.equal(unrelatedNotifications.unread_count, 0);
+    assert.equal(unrelatedNotifications.notifications.length, 0);
+    const forbiddenNotificationRead = await fetch(
+      `${notificationsUrl}/${outbidNotification.id}`,
+      {
+        method: "PATCH",
+        headers: {
+          ...auth(outsiderToken),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ is_read: true }),
+      }
+    );
+    assert.equal(forbiddenNotificationRead.status, 404);
+    const markNotificationRead = await fetch(
+      `${notificationsUrl}/${outbidNotification.id}`,
+      {
+        method: "PATCH",
+        headers: {
+          ...auth(otherToken),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ is_read: true }),
+      }
+    );
+    assert.equal(markNotificationRead.status, 200);
+    assert.equal((await markNotificationRead.json()).unread_count, 0);
+    const markNotificationUnread = await fetch(
+      `${notificationsUrl}/${outbidNotification.id}`,
+      {
+        method: "PATCH",
+        headers: {
+          ...auth(otherToken),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ is_read: false }),
+      }
+    );
+    assert.equal(markNotificationUnread.status, 200);
+    assert.equal((await markNotificationUnread.json()).unread_count, 1);
+    const cleanupNotificationAuction = await fetch(
+      `${baseUrl}/${notificationAuctionId}/cancel`,
+      {
+        method: "POST",
+        headers: {
+          ...auth(sellerToken),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ reason: "Notification test complete." }),
+      }
+    );
+    assert.equal(cleanupNotificationAuction.status, 200);
 
     const textbookResponse = await fetch(baseUrl, {
       method: "POST",
@@ -326,6 +439,30 @@ test("auction APIs enforce management, browsing, and bid rules", async () => {
     );
     assert.equal(pendingDetail.events.at(-2).to_status, "closed");
     assert.equal(pendingDetail.events.at(-1).to_status, "pending_approval");
+    const sellerCloseNotifications = (
+      await (await fetch(notificationsUrl, { headers: auth(sellerToken) })).json()
+    ).notifications.filter((notification) =>
+      notification.auction_id === pendingAuctionId
+    );
+    const winnerCloseNotifications = (
+      await (await fetch(notificationsUrl, { headers: auth(otherToken) })).json()
+    ).notifications.filter((notification) =>
+      notification.auction_id === pendingAuctionId
+    );
+    const outsiderCloseNotifications = (
+      await (await fetch(notificationsUrl, { headers: auth(outsiderToken) })).json()
+    ).notifications.filter((notification) =>
+      notification.auction_id === pendingAuctionId
+    );
+    assert.deepEqual(
+      sellerCloseNotifications.map((notification) => notification.type),
+      ["auction_closed"]
+    );
+    assert.deepEqual(
+      winnerCloseNotifications.map((notification) => notification.type),
+      ["provisional_winner"]
+    );
+    assert.deepEqual(outsiderCloseNotifications, []);
 
     const forbiddenApproval = await fetch(
       `${baseUrl}/${pendingAuctionId}/approve`,
@@ -354,6 +491,15 @@ test("auction APIs enforce management, browsing, and bid rules", async () => {
     assert.equal(approvedAuction.winner_id, Number(otherUser.lastInsertRowid));
     assert.equal(approvedAuction.winning_amount, 20);
     assert.equal(approvedAuction.events.at(-1).to_status, "approved");
+    const approvalNotifications = (
+      await (await fetch(notificationsUrl, { headers: auth(otherToken) })).json()
+    ).notifications.filter((notification) =>
+      notification.auction_id === pendingAuctionId
+    );
+    assert.deepEqual(
+      approvalNotifications.map((notification) => notification.type),
+      ["winning_bid_approved", "provisional_winner"]
+    );
     const sellerHandoverConfirmation = await fetch(
       `${baseUrl}/${pendingAuctionId}/handover/confirm`,
       {
@@ -432,6 +578,19 @@ test("auction APIs enforce management, browsing, and bid rules", async () => {
     );
     assert.equal(completedAuction.events.at(-1).from_status, "approved");
     assert.equal(completedAuction.events.at(-1).to_status, "completed");
+    for (const token of [sellerToken, otherToken]) {
+      const participantNotifications = (
+        await (await fetch(notificationsUrl, { headers: auth(token) })).json()
+      ).notifications.filter((notification) =>
+        notification.auction_id === pendingAuctionId
+      );
+      assert.equal(
+        participantNotifications.filter(
+          (notification) => notification.type === "handover_completed"
+        ).length,
+        1
+      );
+    }
     const latePickupReport = await fetch(
       `${baseUrl}/${pendingAuctionId}/failed-pickup`,
       {
@@ -514,6 +673,15 @@ test("auction APIs enforce management, browsing, and bid rules", async () => {
     );
     assert.equal(rejectedAuction.events.at(-1).event_type, "seller_rejected_winning_bid");
     assert.equal(rejectedAuction.events.at(-1).note, "The item cannot be handed over.");
+    const rejectionNotifications = (
+      await (await fetch(notificationsUrl, { headers: auth(otherToken) })).json()
+    ).notifications.filter((notification) =>
+      notification.auction_id === rejectAuctionId
+    );
+    assert.deepEqual(
+      rejectionNotifications.map((notification) => notification.type),
+      ["winning_bid_rejected", "provisional_winner"]
+    );
 
     const failedPickupAuctionId =
       await createApprovedSale("Failed pickup calculator");
@@ -564,6 +732,32 @@ test("auction APIs enforce management, browsing, and bid rules", async () => {
       failedPickup.events.at(-1).note,
       "Winning bidder: The winner could not attend."
     );
+    for (const [token, expectedTypes] of [
+      [sellerToken, ["auction_closed", "pickup_failed"]],
+      [otherToken, [
+        "pickup_failed",
+        "provisional_winner",
+        "winning_bid_approved",
+      ]],
+    ]) {
+      const participantNotifications = (
+        await (await fetch(notificationsUrl, { headers: auth(token) })).json()
+      ).notifications.filter((notification) =>
+        notification.auction_id === failedPickupAuctionId
+      );
+      assert.deepEqual(
+        participantNotifications
+          .map((notification) => notification.type)
+          .sort(),
+        expectedTypes.sort()
+      );
+    }
+    const outsiderFailedPickupNotifications = (
+      await (await fetch(notificationsUrl, { headers: auth(outsiderToken) })).json()
+    ).notifications.filter((notification) =>
+      notification.auction_id === failedPickupAuctionId
+    );
+    assert.deepEqual(outsiderFailedPickupNotifications, []);
     const duplicatePickupReport = await fetch(
       `${baseUrl}/${failedPickupAuctionId}/failed-pickup`,
       {

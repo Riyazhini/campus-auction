@@ -200,4 +200,20 @@ implicit behavior that contradicts the documented bidding rules.
 - Cancellation requires a non-empty reason.
 - The reason must be saved in `outcome_note`.
 - Cancellation is allowed even when bids exist.
-- Notifications to affected bidders will be implemented separately.
+- Successful lifecycle events create notifications for the relevant users;
+  failed requests and unrelated users must not receive notifications.
+
+## In-app Notifications
+
+- Notifications are persisted and scoped to their recipient.
+- The previous leading bidder is notified only after a new bid is accepted.
+- The seller and provisional winner are notified when an auction with bids
+  closes; an auction closing without bids notifies its seller.
+- The provisional winner is notified after the seller approves or rejects
+  the winning bid.
+- Both sale participants are notified when handover completes or a failed
+  pickup / approved-sale cancellation is recorded.
+- Authenticated users can list only their own notifications and update the
+  read status only for notifications they own.
+- The frontend shows unread count, read status, and a periodically refreshed
+  notification list.

@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from "url";
 
 import authRouter from "./src/routes/auth.js";
 import auctionsRouter from "./src/routes/auctions.js";
+import notificationsRouter from "./src/routes/notifications.js";
 
 export const app = express();
 const PORT = process.env.PORT || 5000;
@@ -38,6 +39,7 @@ app.get("/api/health", (req, res) => {
 // Register API routes before starting the server
 app.use("/api/auth", authRouter);
 app.use("/api/auctions", auctionsRouter);
+app.use("/api/notifications", notificationsRouter);
 
 app.use((error, _req, res, _next) => {
   const status = error.status || (error.name === "MulterError" ? 400 : 500);

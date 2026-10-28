@@ -121,6 +121,148 @@
   font-weight: 700;
 }
 
+.notification-menu {
+  position: relative;
+}
+
+.notification-bell {
+  position: relative;
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: white;
+  color: var(--green-dark);
+  cursor: pointer;
+}
+
+.notification-bell svg {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.notification-count {
+  position: absolute;
+  top: -5px;
+  right: -7px;
+  display: grid;
+  min-width: 19px;
+  height: 19px;
+  place-items: center;
+  padding: 0 4px;
+  border: 2px solid white;
+  border-radius: 12px;
+  background: var(--red);
+  color: white;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.notification-panel {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 12px);
+  right: -54px;
+  width: min(390px, calc(100vw - 28px));
+  max-height: min(72vh, 560px);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: white;
+  box-shadow: var(--shadow);
+}
+
+.notification-panel-heading {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid var(--line);
+  background: white;
+}
+
+.notification-panel-heading h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 17px;
+}
+
+.notification-panel-heading span,
+.notification-open time {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.notification-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.notification-item {
+  display: grid;
+  gap: 8px;
+  padding: 13px 18px;
+  border-bottom: 1px solid #eeece5;
+}
+
+.notification-unread {
+  background: #f5f8ee;
+}
+
+.notification-open {
+  display: grid;
+  gap: 5px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #43514a;
+  text-align: left;
+  cursor: pointer;
+}
+
+.notification-open strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.notification-open span {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.notification-read-toggle {
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--green);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.notification-empty,
+.notification-error {
+  margin: 0;
+  padding: 18px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.notification-error {
+  color: var(--red);
+}
+
 .button {
   display: inline-flex;
   min-height: 46px;
@@ -348,6 +490,24 @@
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 23px;
+}
+
+.category-auction-groups {
+  display: grid;
+  gap: 34px;
+}
+
+.category-auction-section {
+  display: grid;
+  gap: 14px;
+}
+
+.category-auction-section h3 {
+  margin: 0;
+  color: var(--green-dark);
+  font-size: 19px;
+  font-weight: 700;
+  text-transform: capitalize;
 }
 
 .auction-card {
@@ -927,6 +1087,26 @@
 
 .field-wide {
   grid-column: 1 / -1;
+}
+
+.closing-time-fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.closing-time-fieldset legend {
+  margin-bottom: 7px;
+  color: #43514a;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.closing-time-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
 }
 
 .field input,

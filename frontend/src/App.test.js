@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import App from "./App";
+import AuctionForm from "./AuctionForm";
 
 const auction = {
   id: 1,
@@ -45,12 +46,35 @@ function response(payload) {
 
 let fetchMock;
 let currentAuction;
+let currentAuctions;
+let currentNotifications;
 
 beforeEach(() => {
   window.localStorage.clear();
   currentAuction = auction;
+  currentAuctions = [auction];
+  currentNotifications = [];
   fetchMock = jest.fn(async (url, options = {}) => {
     const path = new URL(url).pathname;
+    if (/\/notifications\/\d+$/.test(path) && options.method === "PATCH") {
+      const notificationId = Number(path.split("/").pop());
+      const { is_read: isRead } = JSON.parse(options.body);
+      currentNotifications = currentNotifications.map((notification) =>
+        notification.id === notificationId
+          ? { ...notification, is_read: Number(isRead) }
+          : notification
+      );
+      return response({
+        message: "Notification updated.",
+        unread_count: currentNotifications.filter((item) => !item.is_read).length,
+      });
+    }
+    if (path.endsWith("/notifications")) {
+      return response({
+        notifications: currentNotifications,
+        unread_count: currentNotifications.filter((item) => !item.is_read).length,
+      });
+    }
     if (path.endsWith("/mine")) {
       return response({ auctions: [currentAuction] });
     }
@@ -138,8 +162,8 @@ beforeEach(() => {
       return response({ auction: currentAuction });
     }
     return response({
-      auctions: [auction],
-      pagination: { total: 1 },
+      auctions: currentAuctions,
+      pagination: { total: currentAuctions.length },
     });
   });
   global.fetch = fetchMock;
@@ -156,6 +180,98 @@ test("shows current campus auctions", async () => {
   expect(listingImage).not.toBeNull();
   expect(listingImage).toHaveAttribute("src", expect.stringContaining("test-photo.jpg"));
   expect(listingImage.parentElement).toHaveClass("card-image-button");
+});
+
+test("groups home auctions by category while keeping them browsable", async () => {
+  currentAuctions = [
+    auction,
+    { ...auction, id: 2, category: "books", title: "Course textbook" },
+  ];
+  render(<App />);
+
+  const calculatorSection = await screen.findByRole("region", {
+    name: "calculator auctions",
+  });
+  const booksSection = screen.getByRole("region", { name: "books auctions" });
+  expect(calculatorSection).toHaveTextContent("Graphing calculator");
+  expect(calculatorSection).not.toHaveTextContent("Course textbook");
+  expect(booksSection).toHaveTextContent("Course textbook");
+});
+
+test("notification bell displays unread notifications and marks them read", async () => {
+  currentNotifications = [{
+    id: 12,
+    auction_id: 1,
+    auction_title: "Graphing calculator",
+    type: "outbid",
+    message: "You have been outbid.",
+    is_read: 0,
+    created_at: new Date().toISOString(),
+  }];
+  window.localStorage.setItem("campus-auction-auth", JSON.stringify({
+    token: "test-token",
+    user: { id: 8, name: "Sam" },
+  }));
+  render(<App />);
+
+  const bell = await screen.findByRole("button", {
+    name: "Notifications, 1 unread",
+  });
+  await userEvent.click(bell);
+  expect(await screen.findByText("You have been outbid.")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "Mark as read" }));
+  expect(await screen.findByRole("button", { name: "Mark as unread" }))
+    .toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Notifications" }))
+    .toBeInTheDocument();
+});
+
+test("listing form converts an explicit AM/PM closing time to ISO", () => {
+  const onSubmit = jest.fn();
+  const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  const localDate = [
+    tomorrow.getFullYear(),
+    String(tomorrow.getMonth() + 1).padStart(2, "0"),
+    String(tomorrow.getDate()).padStart(2, "0"),
+  ].join("-");
+  const { container } = render(
+    <AuctionForm onSubmit={onSubmit} onCancel={() => {}} submitting={false} />
+  );
+
+  fireEvent.change(screen.getByLabelText("Item title"), {
+    target: { value: "Course calculator" },
+  });
+  fireEvent.change(screen.getByLabelText("Category"), {
+    target: { value: "calculator" },
+  });
+  fireEvent.change(screen.getByLabelText("Condition"), {
+    target: { value: "good" },
+  });
+  fireEvent.change(screen.getByLabelText("Starting price"), {
+    target: { value: "100" },
+  });
+  fireEvent.change(screen.getByLabelText("Minimum bid increment"), {
+    target: { value: "10" },
+  });
+  fireEvent.change(screen.getByLabelText("Closing date"), {
+    target: { value: localDate },
+  });
+  fireEvent.change(screen.getByLabelText("Hour"), {
+    target: { value: "11" },
+  });
+  fireEvent.change(screen.getByLabelText("Minute"), {
+    target: { value: "30" },
+  });
+  fireEvent.change(screen.getByLabelText("AM/PM"), {
+    target: { value: "PM" },
+  });
+  fireEvent.submit(container.querySelector("form"));
+
+  expect(onSubmit).toHaveBeenCalledTimes(1);
+  expect(onSubmit.mock.calls[0][0].get("closes_at")).toBe(
+    new Date(`${localDate}T23:30`).toISOString()
+  );
 });
 
 test("auction detail includes the leading bid, bid history, and countdown", async () => {

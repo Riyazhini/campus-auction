@@ -7,6 +7,7 @@ import db from "../db/index.js";
 import { authenticateToken } from "../middleware/auth.js";
 import upload from "../middleware/upload.js";
 import { validateAuction } from "../utils/validateAuction.js";
+import { notifyUsers } from "../utils/notifications.js";
 import {
   AUCTION_CATEGORIES,
   ITEM_CONDITIONS,
@@ -139,7 +140,8 @@ function recordAuctionEvent({
 
 function settleExpiredAuction(auctionId) {
   const auction = db.prepare(`
-    SELECT status, closes_at FROM auctions WHERE id = ?
+    SELECT status, closes_at, seller_id, title
+    FROM auctions WHERE id = ?
   `).get(auctionId);
 
   if (
@@ -203,6 +205,27 @@ function settleExpiredAuction(auctionId) {
         ? `Provisional winner selected at ${leadingBid.amount}.`
         : "Auction closed without valid bids.",
     });
+    if (leadingBid) {
+      notifyUsers(
+        [auction.seller_id],
+        auctionId,
+        "auction_closed",
+        `"${auction.title}" closed. Review the provisional winning bid.`
+      );
+      notifyUsers(
+        [leadingBid.bidder_id],
+        auctionId,
+        "provisional_winner",
+        `You are the provisional winner of "${auction.title}" at ${leadingBid.amount}.`
+      );
+    } else {
+      notifyUsers(
+        [auction.seller_id],
+        auctionId,
+        "auction_closed",
+        `"${auction.title}" closed without any bids and is unsold.`
+      );
+    }
   }
 
   return status;
@@ -230,7 +253,7 @@ function decideAuction({ auctionId, actorId, decision, note = null }) {
   const nextStatus = decision === "approve" ? "approved" : "rejected";
   return db.transaction(() => {
     const auction = db.prepare(`
-      SELECT seller_id, status, winner_id, winning_amount
+      SELECT seller_id, status, winner_id, winning_amount, title
       FROM auctions
       WHERE id = ?
     `).get(auctionId);
@@ -283,6 +306,14 @@ function decideAuction({ auctionId, actorId, decision, note = null }) {
       toStatus: nextStatus,
       note,
     });
+    notifyUsers(
+      [auction.winner_id],
+      auctionId,
+      decision === "approve" ? "winning_bid_approved" : "winning_bid_rejected",
+      decision === "approve"
+        ? `The seller approved your winning bid of ${auction.winning_amount} for "${auction.title}".`
+        : `The seller rejected your winning bid for "${auction.title}".${note ? ` Reason: ${note}` : ""}`
+    );
 
     return {
       status: 200,
@@ -709,7 +740,7 @@ router.post("/:id/handover/confirm", authenticateToken, (req, res) => {
   try {
     const result = db.transaction(() => {
       const auction = db.prepare(`
-        SELECT seller_id, winner_id, status
+        SELECT seller_id, winner_id, status, title
         FROM auctions
         WHERE id = ?
       `).get(auctionId);
@@ -771,6 +802,12 @@ router.post("/:id/handover/confirm", authenticateToken, (req, res) => {
             toStatus: "completed",
             note: "Both seller and winning bidder confirmed campus handover.",
           });
+          notifyUsers(
+            [auction.seller_id, auction.winner_id],
+            auctionId,
+            "handover_completed",
+            `Campus handover for "${auction.title}" is complete.`
+          );
         }
       }
 
@@ -820,7 +857,7 @@ function handleApprovedSaleOutcome(req, res, {
   try {
     const result = db.transaction(() => {
       const auction = db.prepare(`
-        SELECT seller_id, winner_id, status
+        SELECT seller_id, winner_id, status, title
         FROM auctions
         WHERE id = ?
       `).get(auctionId);
@@ -864,6 +901,12 @@ function handleApprovedSaleOutcome(req, res, {
         toStatus: nextStatus,
         note: `${role}: ${reason}`,
       });
+      notifyUsers(
+        [auction.seller_id, auction.winner_id],
+        auctionId,
+        eventType,
+        `${role} recorded ${nextStatus === "failed_pickup" ? "a failed pickup" : "a sale cancellation"} for "${auction.title}". Reason: ${reason}`
+      );
 
       return {
         status: 200,
@@ -921,7 +964,8 @@ router.post("/:id/bids", authenticateToken, (req, res) => {
   try {
     const result = db.transaction(() => {
       const auction = db.prepare(`
-        SELECT id, seller_id, starting_price, min_increment, closes_at, status
+        SELECT id, seller_id, title, starting_price, min_increment,
+          closes_at, status
         FROM auctions
         WHERE id = ?
       `).get(auctionId);
@@ -1001,6 +1045,14 @@ router.post("/:id/bids", authenticateToken, (req, res) => {
         INSERT INTO bids (auction_id, bidder_id, amount)
         VALUES (?, ?, ?)
       `).run(auctionId, req.user.id, amount);
+      if (leadingBid && leadingBid.bidder_id !== req.user.id) {
+        notifyUsers(
+          [leadingBid.bidder_id],
+          auctionId,
+          "outbid",
+          `You have been outbid on "${auction.title}". The new leading bid is ${amount}.`
+        );
+      }
       const bid = db.prepare(`
         SELECT id, amount, created_at
         FROM bids WHERE id = ?
