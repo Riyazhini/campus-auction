@@ -14,6 +14,9 @@ const auction = {
   current_price: 450,
   closes_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
   status: "active",
+  winner_id: 8,
+  winner_name: "Sam",
+  winning_amount: 450,
   created_at: new Date().toISOString(),
   seller_name: "Riya",
   primary_photo: null,
@@ -40,11 +43,28 @@ function response(payload) {
 }
 
 let fetchMock;
+let currentAuction;
 
 beforeEach(() => {
   window.localStorage.clear();
+  currentAuction = auction;
   fetchMock = jest.fn(async (url) => {
     const path = new URL(url).pathname;
+    if (path.endsWith("/mine")) {
+      return response({ auctions: [currentAuction] });
+    }
+    if (path.endsWith("/approve")) {
+      currentAuction = { ...currentAuction, status: "approved" };
+      return response({ auction: currentAuction });
+    }
+    if (path.endsWith("/reject")) {
+      currentAuction = {
+        ...currentAuction,
+        status: "rejected",
+        outcome_note: "The item cannot be handed over.",
+      };
+      return response({ auction: currentAuction });
+    }
     if (path.endsWith("/bids")) {
       return response({ message: "Bid placed successfully." });
     }
@@ -58,7 +78,7 @@ beforeEach(() => {
       });
     }
     if (/\/api\/auctions\/\d+$/.test(path)) {
-      return response({ auction });
+      return response({ auction: currentAuction });
     }
     return response({
       auctions: [auction],
@@ -110,6 +130,60 @@ test("seller can open listing management controls", async () => {
     .toBeInTheDocument();
   expect(screen.getByLabelText("Starting price")).toBeDisabled();
   expect(screen.getByLabelText("Minimum bid increment")).toBeDisabled();
+});
+
+test("seller can review and approve a provisional winning bid", async () => {
+  currentAuction = { ...auction, status: "pending_approval" };
+  window.localStorage.setItem("campus-auction-auth", JSON.stringify({
+    token: "test-token",
+    user: { id: 7, name: "Riya" },
+  }));
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "My auctions" }));
+  expect(await screen.findByRole("heading", { name: "My auctions" }))
+    .toBeInTheDocument();
+  await userEvent.click(await screen.findByRole("button", {
+    name: "View Graphing calculator",
+  }));
+
+  await userEvent.click(await screen.findByRole("button", {
+    name: "Approve winning bid",
+  }));
+  expect(await screen.findByText("This auction is approved."))
+    .toBeInTheDocument();
+  expect(fetchMock).toHaveBeenCalledWith(
+    expect.stringMatching(/\/api\/auctions\/1\/approve$/),
+    expect.objectContaining({ method: "POST" })
+  );
+});
+
+test("seller rejection requires and displays an outcome reason", async () => {
+  currentAuction = { ...auction, status: "pending_approval" };
+  window.localStorage.setItem("campus-auction-auth", JSON.stringify({
+    token: "test-token",
+    user: { id: 7, name: "Riya" },
+  }));
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "My auctions" }));
+  await userEvent.click(await screen.findByRole("button", {
+    name: "View Graphing calculator",
+  }));
+  await userEvent.type(
+    await screen.findByLabelText("Rejection reason"),
+    "The item cannot be handed over."
+  );
+  await userEvent.click(screen.getByRole("button", {
+    name: "Reject winning bid",
+  }));
+
+  expect(await screen.findByText("The item cannot be handed over."))
+    .toBeInTheDocument();
+  expect(fetchMock).toHaveBeenCalledWith(
+    expect.stringMatching(/\/api\/auctions\/1\/reject$/),
+    expect.objectContaining({ method: "POST" })
+  );
 });
 
 test("seller cancellation records and displays its outcome", async () => {

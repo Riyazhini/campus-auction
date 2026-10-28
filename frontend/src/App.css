@@ -424,6 +424,13 @@
   background: rgba(255, 255, 255, 0.93);
 }
 
+.card-image > .status-chip {
+  position: absolute;
+  top: 13px;
+  right: 13px;
+  background: rgba(255, 255, 255, 0.93);
+}
+
 .card-body {
   display: flex;
   flex: 1;
@@ -625,6 +632,24 @@
 }
 
 .status-cancelled {
+  background: #f8e9e5;
+  color: var(--red);
+}
+
+.status-approved,
+.status-completed {
+  background: #e2f0df;
+  color: var(--green-dark);
+}
+
+.status-pending_approval {
+  background: #f5edcf;
+  color: #80621b;
+}
+
+.status-rejected,
+.status-failed_pickup,
+.status-unsold {
   background: #f8e9e5;
   color: var(--red);
 }

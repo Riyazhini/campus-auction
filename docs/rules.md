@@ -61,18 +61,19 @@ The server determines whether the auction has valid bids.
 ### 4.3 Pending Approval
 
 The auction has closed with at least one valid bid and is waiting
-for an authorized reviewer to decide the outcome.
+for its seller to decide the provisional winning bid.
 
 ### 4.4 Approved
 
-The proposed auction outcome and winning bid have been approved.
-The transaction can proceed to the pickup or handover stage.
+The seller has approved the provisional winning bid. The winner and amount
+are reserved for that transaction, and no further bids or seller changes
+are accepted.
 
 ### 4.5 Rejected
 
-The proposed auction outcome or winning bid has been rejected
-by an authorized reviewer. The auction cannot be completed
-unless an explicitly defined recovery process is introduced.
+The seller has rejected the provisional winning bid and recorded a
+non-empty reason. The auction cannot be completed unless an explicitly
+defined recovery process is introduced.
 
 ### 4.6 Completed
 
@@ -99,11 +100,11 @@ The expected state transitions are:
 
 - Active -> Closed
 - Active -> Cancelled
-- Active -> Closed (when the closing time passes)
 - Closed -> Pending Approval (if valid bids exist; highest bid is provisional)
 - Closed -> Unsold (if no valid bids exist)
 - Pending Approval -> Approved
 - Pending Approval -> Rejected
+- Approved -> Cancelled (seller or winner, with a reason)
 - Approved -> Completed (if pickup succeeds)
 - Approved -> Failed Pickup (if pickup fails)
 
@@ -158,13 +159,14 @@ explicitly defined before implementation.
    currency calculations, not floating-point arithmetic.
 8. Every listing creation and lifecycle outcome must be recorded with
    actor, timestamp, status transition, and applicable outcome note.
+9. Only the listing seller may approve or reject a provisional winning bid.
+   Rejection requires a recorded reason.
 
 ## 9. Assumptions and Policies to Finalize
 
 Before implementation, decide:
 
 - Whether bidders can place multiple consecutive bids.
-- Who is authorized to approve or reject an auction outcome.
 - What happens after a winning bidder fails to collect an item.
 - Whether a rejected outcome can be reviewed or reopened.
 - Who can cancel an auction and under what conditions.

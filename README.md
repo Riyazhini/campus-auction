@@ -10,6 +10,7 @@ items. The project uses a React frontend, an Express API, and SQLite.
 - Browse and filter active auctions; inspect listing details and public bid history
 - Place bids with server-side validation and serialized SQLite transactions
 - Expired auctions close on reads or bid attempts, selecting a provisional winner or marking the auction unsold
+- Sellers can approve or reject provisional winners; participants can find relevant listings in My auctions
 - Auction state changes and outcome notes are recorded in an event history
 
 ## Requirements
@@ -79,6 +80,8 @@ Create React App can produce a production build with `npm run build`.
   `maxPrice`, `closesSoon`, `limit`, and `offset` query parameters
 - `POST /api/auctions` to create a listing (bearer token required)
 - `GET /api/auctions/:id` for item details and public bid history
+- `GET /api/auctions/mine` for authenticated seller and winner listings
+- `POST /api/auctions/:id/approve` or `/reject` for seller decisions
 - `PATCH /api/auctions/:id` and `POST /api/auctions/:id/cancel` for
   seller-only listing management
 - `POST /api/auctions/:id/bids` to place a bid (bearer token required)
